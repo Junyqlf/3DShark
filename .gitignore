@@ -1,0 +1,27 @@
+# ===== Unity 标准忽略项 =====
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]serSettings/
+MemoryCaptures/
+crashlytics-build.properties
+
+# ===== IDE / 编辑器 =====
+.idea/
+.vs/
+.vscode/
+*.csproj
+*.sln
+*.user
+
+# ===== 系统/临时文件 =====
+~$*
+*.tmp
+.DS_Store
+Thumbs.db
+
+# ===== 本仓库约定 =====
+# Library 是 Unity 自动生成的缓存（79MB），不入库
