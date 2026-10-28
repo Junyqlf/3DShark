@@ -29,7 +29,7 @@ namespace SandKill.Unity
         public int GrandMinisterCount = 1;
         public int WardenCount = 3;
         public int MaidCount = 4;
-        public int GreenAppleCount = 3;
+        public int GreenAppleCount = 0;    // 青苹果：2026-10-23 退环境（升级奖励改为回血后替代其中期生态位；引擎机制保留，自定义可调回）
         public int TerroristCount = 4;
 
         [Header("节奏")]

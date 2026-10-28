@@ -39,18 +39,19 @@ namespace SandKill.Core
         public static readonly int COST_BOMB = CardDefs.Of(CardType.Terrorist).SkillCost;          // 恐怖分子安放炸弹蓝耗（2026-10-13 改版）
         public const int TRIUMPH_SHIELD_TURNS = 2;  // 凯旋护盾持续回合数（对标方案C合成护盾节拍）
         public const int XP_LEVEL_2 = 6;            // 英雄升级（2026-10-21 用户裁定）：消灭6张牌升2级
-        public const int XP_LEVEL_3 = 8;            // 英雄升级（2026-10-21 用户裁定）：消灭8张牌升3级（升2后再攒2点）
+        public const int XP_LEVEL_3 = 9;            // 英雄升级（2026-10-23 用户裁定 8→9）：累计消灭9张升3级（升2后再攒3点）——合成牌2EXP后0→1提速的中期平衡
         public const int MAX_HERO_LEVEL = 2;        // HeroLevel 语义=已升级次数：0=初始(1级) / 1=升过1次(2级) / 2=升满(3级)；每局最多升2次
         public const int LEVEL_SHIELD_TURNS = 2;    // 升级奖励护盾持续回合数（方案C同款节拍；草样里直接复用 CRAFT_SHIELD_TURNS，单列常量便于将来分叉）
 
-        /// <summary>合成配方（2026-10-06）：合成牌 → 需要的3张牌；null = 任意非英雄牌。合成另耗1行动点，奖励抽1张牌。</summary>
+        /// <summary>合成配方（2026-10-23 用户裁定大改）：圣骑士/女武神/女祭司/审判官降格为2合1（去掉"任意"位/青苹果/牧师），
+        /// 只有典狱长保留3合1；合成另耗1行动点，合成奖励（方案C护盾）只保留给典狱长（Craft 分支按合成牌类型判定）。</summary>
         public static readonly Dictionary<CardType, CardType?[]> CraftRecipes = new Dictionary<CardType, CardType?[]>
         {
-            { CardType.Priestess,  new CardType?[] { CardType.GreenApple, CardType.Witch, CardType.Priest } },
-            { CardType.Valkyrie,   new CardType?[] { CardType.Guard, CardType.Maid, null } },
-            { CardType.Paladin,    new CardType?[] { CardType.Guard, CardType.Priest, null } },
-            { CardType.Jailer,     new CardType?[] { CardType.Warden, CardType.Police, CardType.Minister } },
-            { CardType.Inquisitor, new CardType?[] { CardType.Exorcist, CardType.Priest, CardType.Maid } },
+            { CardType.Priestess,  new CardType?[] { CardType.Witch, CardType.Priest } },     // 女祭司（2026-10-23 去掉青苹果；技能=继承女巫剩余双药+牧师亡语）
+            { CardType.Valkyrie,   new CardType?[] { CardType.Guard, CardType.Maid } },       // 女武神（2026-10-23 去掉"任意"位）
+            { CardType.Paladin,    new CardType?[] { CardType.Guard, CardType.Priest } },     // 圣骑士（2026-10-23 去掉"任意"位）
+            { CardType.Jailer,     new CardType?[] { CardType.Warden, CardType.Police, CardType.Minister } },   // 典狱长（唯一保留3合1+合成奖励）
+            { CardType.Inquisitor, new CardType?[] { CardType.Exorcist, CardType.Maid } },    // 审判官（2026-10-23 去掉牧师——加强垫底合成牌）
         };
 
         /// <summary>英雄模板。未来加新英雄 = 在这张表里加一行 + 在ApplyAction的HeroPower分支里实现。</summary>
@@ -156,6 +157,9 @@ namespace SandKill.Core
         bool[] _powerUsed;
         readonly Random _rng;
         int _turnStamp;   // 回合戳：每回合自增；技能"每回合一次"用戳判定而不是布尔重置
+        int[] _effStamp;                      // 每座位"生效回合戳"：冰川冻结窗口内保持不变——窗口内每回合限1次技能真正不刷新（2026-10-23 修正）
+        bool[] _effStampHeld;                 // 是否处于冻结拉伸中：true=本冻结回合沿用窗口起点戳（首冻结回合设戳，其后冻结回合沿用）
+        bool[] _stretchAttackUsed;            // 冻结窗口内是否已普攻：冻结回合开始时普攻槽恢复为该状态（他人回合开始造成的全局重置不算数）
         bool[] _earlyAttackUsed;              // 攻城锤：本回合的额外普攻机会是否已用
         int[] _apSinceHurt;                   // 医师：自受伤起消耗的行动点计数（受伤重置）
         int[] _focusSeat = new int[0];        // 强攻：连击目标（-1=无）
@@ -192,6 +196,9 @@ namespace SandKill.Core
             Players = new List<PlayerState>();
             _heroes = new HeroSpec[names.Length];
             _powerUsed = new bool[names.Length];
+            _effStamp = new int[names.Length];
+            _effStampHeld = new bool[names.Length];
+            _stretchAttackUsed = new bool[names.Length];
             _earlyAttackUsed = new bool[names.Length];
             _apSinceHurt = new int[names.Length];
             _focusSeat = new int[names.Length];
@@ -334,12 +341,19 @@ namespace SandKill.Core
         public bool SkillsFree(int seat) { return _freeSkills.Contains(seat); }
 
         /// <summary>该牌本回合是否已用过技能（回合戳判定，与牌当前在不在手无关）。UI 显示与测试断言都用这个。</summary>
-        public bool UsedThisTurn(Card c) { return c.UsedSkillTurn == _turnStamp; }
+        public bool UsedThisTurn(Card c) { return c.UsedSkillTurn == _effStamp[Current]; }   // 生效戳：冰川冻结窗口内保持窗口起点值（2026-10-23）
 
         public bool IsSilenced(int seat) { return _silenced.Contains(seat); }
 
         /// <summary>该牌是否处于守卫的"无法选取"状态（2026-10-15 改版）：牌留在手牌，但不参与一切针对手牌的判定。</summary>
         public bool IsGuardProtected(Card c) { return c.GuardProtectTurn >= 0; }
+
+        /// <summary>随机选取池排除判定（2026-10-23 标记机制的基础设施）：true=该牌无法被随机选取。
+        /// gen2 默认只排除守卫"无法选取"的牌；gen3 覆写追加"被标记的牌"（标记=无法随机选取、但可被定向选取，见 AttackMarked）。</summary>
+        protected virtual bool IsRandomUnselectable(Card c) { return c.GuardProtectTurn >= 0; }
+
+        /// <summary>攻击时定向抽中的牌（gen3 攻击被标记牌用，一次 base.ApplyAction 攻击期间有效）；null=正常随机池。</summary>
+        protected Card _forceDrawn;
 
         /// <summary>该座位手牌中处于"无法选取"状态的牌数。守卫发动是公开行动（但护住的是哪张牌只有拥有者知道），
         /// 张数本身全场可见——UI 状态栏与 AI 威胁评估用。</summary>
@@ -353,10 +367,17 @@ namespace SandKill.Core
             return a == null ? -1 : a[0];
         }
 
+        /// <summary>3代冰川：该座位的本回合是否"冻结刷新"——true 时行动点不回满、回合戳不自增
+        /// （每回合限1次的技能不刷新）、普攻槽不重置；回合表/抽牌/倒数等其它回合开始流程照常。</summary>
+        protected virtual bool IsTurnRefreshFrozen(int seat) { return false; }
+
         protected virtual void StartTurn(int seat)
         {
             var p = Players[seat];
             p.OwnTurnCount++;
+            bool frozen = IsTurnRefreshFrozen(seat);
+            bool firstFrozen = frozen && !_effStampHeld[seat];   // 冻结窗口的首个回合（其后冻结回合=窗口内第2/3/…回合）
+            if (frozen) Log(p.Name + " 的回合被【冰川】冻结：行动点不回满，普攻与每回合限1次的技能也不刷新！");
             // ⑦ 强攻削弱（2026-10-14 用户裁定）：连击必须每回合持续命中同一目标——自己回合开始时若上个回合没打到连击目标
             // （停手、被封印/结盟卡住、转火他人），连击清零。打其它目标本就会换目标重置（TrackFocus），这里补"漏回合"的衰减。
             if (_heroes[seat].FocusFire && _focusCount[seat] > 0 && _focusLastTurn[seat] < p.OwnTurnCount - 1)
@@ -369,15 +390,30 @@ namespace SandKill.Core
             if (p.ShieldCharges > 0 && p.OwnTurnCount > p.ShieldExpireOwnTurn)
             {
                 p.ShieldCharges = 0;
+                p.ShieldSourceSeat = -1;
                 Log(p.Name + " 的【护盾】到期消散。");
             }
             p.LastTurnStamp = _turnStamp;                    // 记录上一个回合开始戳（解药复活窗口用）
-            _turnStamp++;                                    // 回合戳自增：所有牌的"已用"状态随之过期，与牌在不在手无关
+            if (!frozen)
+            {
+                _turnStamp++;                                // 回合戳自增：所有牌的"已用"状态随之过期；冰川冻结回合不刷新
+                _effStamp[seat] = _turnStamp;                // 生效戳跟随全局戳（非冻结=恒等映射，旧语义不变）
+                _effStampHeld[seat] = false;
+            }
+            else if (firstFrozen)
+            {
+                _effStamp[seat] = _turnStamp;                // 冻结窗口起点：生效戳=当前戳——窗口前用过的回合技（戳更旧）本窗口可用一次；窗口内用掉的保持已用
+                _effStampHeld[seat] = true;
+            }
+            // 其余冻结回合：生效戳沿用窗口起点值 → 每回合限1次技能（警察扣押/驱魔/普攻等）真正不刷新（2026-10-23 修正）
             var h = _heroes[seat];
             // 工人（2026-10-13 进2代牌库）：手牌中有工人 → 行动点上限+1（多张不叠加，只算一次）
             int workerBonus = p.Hand.Any(c => c.Type == CardType.Worker) ? 1 : 0;
-            p.MaxMP = h.MP + (h.EarlyMpBonus > 0 && p.OwnTurnCount <= h.ExtraAttackEarly ? h.EarlyMpBonus : 0) + workerBonus;   // 攻城锤：前2回合行动点+1（2026-10-09 用户裁定）
-            p.MP = p.MaxMP;
+            if (!frozen)   // 冰川冻结回合不回蓝（2026-10-23）：行动点保持结余，跨两个回合自主分配
+            {
+                p.MaxMP = h.MP + (h.EarlyMpBonus > 0 && p.OwnTurnCount <= h.ExtraAttackEarly ? h.EarlyMpBonus : 0) + workerBonus;   // 攻城锤：前2回合行动点+1（2026-10-09 用户裁定）
+                p.MP = p.MaxMP;
+            }
             _armGuard.Remove(seat);                          // 自己的带刀侍卫buff到自己的下回合开始过期
             // 我贿赂来的保护按"我的回合开始"扣减：剩余回合数-1，归零过期（2026-10-15③：多回合结盟移除，恒1回合；美人计1回合光环同理）
             for (int i = _alliances.Count - 1; i >= 0; i--)
@@ -396,8 +432,19 @@ namespace SandKill.Core
                 var c = SideDeck[0]; SideDeck.RemoveAt(0); p.Hand.Add(c);
                 Log(p.Name + " 从牌堆补充了1张牌。（牌堆剩余" + SideDeck.Count + "）");
             }
-            BasicAttackUsed = false;
-            _earlyAttackUsed[seat] = false;                  // 攻城锤：额外普攻机会每回合刷新（只在前2回合可被使用）
+            if (!frozen)   // 非冻结回合：普攻槽照常全局重置
+            {
+                BasicAttackUsed = false;
+                _earlyAttackUsed[seat] = false;              // 攻城锤：额外普攻机会每回合刷新（只在前2回合可被使用）
+                _stretchAttackUsed[seat] = false;            // 冻结窗口已结束：普攻使用记录清零
+            }
+            else if (firstFrozen)
+            {
+                _stretchAttackUsed[seat] = false;            // 合并窗口从本回合起算：窗口前的普攻不占用窗口额度
+                BasicAttackUsed = false;
+            }
+            else
+                BasicAttackUsed = _stretchAttackUsed[seat];  // 窗口内第2个冻结回合：普攻槽恢复为窗口内已用状态——他人回合开始造成的全局重置不算刷新
             // 青苹果：受伤倒数只在拥有者自己的回合开始时走表（再次受伤不打断、由 NoteAppleCountdown 保证不重置）
             foreach (var apple in p.Hand.Where(c => c.Type == CardType.GreenApple && c.AppleTimer > 0).ToList())
             {
@@ -410,20 +457,6 @@ namespace SandKill.Core
                     Log(p.Name + " 的【青苹果】熟透了，自动吃掉：回复1点HP（" + p.HP + "/" + p.MaxHP + "）。");
                 }
                 else Log(p.Name + " 的【青苹果】还在倒数（剩 " + apple.AppleTimer + " 回合）。");
-            }
-            // 女祭司·祈祷到期：2回合后把自身1点生命转化为英雄的1点生命（生命耗尽则女祭司进入弃牌堆）
-            foreach (var ps in p.Hand.Where(c => c.Type == CardType.Priestess && c.PrayerDueTurn > 0 && p.OwnTurnCount >= c.PrayerDueTurn).ToList())
-            {
-                ps.PrayerDueTurn = -1;
-                ps.SynthHP--;
-                if (p.HP < p.MaxHP) p.HP++;
-                if (ps.SynthHP <= 0)
-                {
-                    p.Hand.Remove(ps);
-                    ToDiscard(ps);
-                    Log(p.Name + " 的【女祭司】祈祷应验：1点生命化为英雄的1点生命（" + p.HP + "/" + p.MaxHP + "），女祭司圣力耗尽，随风而逝。");
-                }
-                else Log(p.Name + " 的【女祭司】祈祷应验：1点生命化为英雄的1点生命（" + p.HP + "/" + p.MaxHP + "），剩余 " + ps.SynthHP + " 点生命。");
             }
             // 恐怖分子炸弹：触发器绑定在安放者身上——自己的回合开始结算到期的炸弹（检查恐怖分子还活不活）
             foreach (var bomb in AllCards().Where(c => c.BombActive && c.BombPlanter == seat
@@ -465,7 +498,7 @@ namespace SandKill.Core
             if (!silenced)
             foreach (var c in me.Hand)
             {
-                if (c.Type == CardType.Hero || (c.UsedSkillTurn == _turnStamp && !free) || _silencedCards.Contains(c)) continue;
+                if (c.Type == CardType.Hero || (c.UsedSkillTurn == _effStamp[seat] && !free) || _silencedCards.Contains(c)) continue;
                 switch (c.Type)
                 {
                     case CardType.Exorcist:
@@ -529,11 +562,15 @@ namespace SandKill.Core
                             }
                         break;
                     case CardType.Priestess:
-                        if ((!c.ReviveUsed || free) && me.MP >= COST_SYNTH_SKILL
-                            && Discard.Any(d => d.Type.IsRole() && d.Type != CardType.Hero))
-                            list.Add(new GameAction { Kind = ActionKind.SynthRevive, SourceCardId = c.Id });
-                        if ((!c.PrayerUsed || free) && me.MP >= COST_SYNTH_SKILL && c.SynthHP > 0)
-                            list.Add(new GameAction { Kind = ActionKind.SynthPrayer, SourceCardId = c.Id });
+                        // 2026-10-23 用户裁定女祭司重做：复活/祈祷移除——继承合成材料中女巫的剩余双药
+                        // （PoisonUsed/AntidoteUsed 在合成时从女巫卡拷贝：用掉的药不继承）+ 自带牧师亡语（见 ResolveDrawn/DiscardGuard）。
+                        if ((!c.PoisonUsed || free) && me.MP >= COST_POISON)
+                            foreach (var t in targets)
+                                if (!IsProtected(seat, t.Seat))
+                                    list.Add(new GameAction { Kind = ActionKind.PoisonAttack, TargetSeat = t.Seat, SourceCardId = c.Id });
+                        if ((!c.AntidoteUsed || free) && me.MP >= COST_ANTIDOTE
+                            && Discard.Any(d => d.Type.IsRole() && d.Type != CardType.Hero && d.DiedStamp >= me.LastTurnStamp))
+                            list.Add(new GameAction { Kind = ActionKind.Antidote, SourceCardId = c.Id });
                         break;
                     case CardType.Jailer:
                         // 2回合冷却（2026-10-14 用户裁定，削弱停战软锁）：距上次扣押不足2个自己的回合不可再扣押；save期间不消耗冷却
@@ -633,7 +670,7 @@ namespace SandKill.Core
                     me.MP -= COST_BASIC_ATTACK;
                     NoteApSpent(me);
                     if (BasicAttackUsed) _earlyAttackUsed[seat] = true;
-                    else BasicAttackUsed = true;
+                    else { BasicAttackUsed = true; _stretchAttackUsed[seat] = true; }   // 冻结窗口记录：窗口内第2个冻结回合普攻槽不刷新（2026-10-23）
                     DoAttack(seat, a.TargetSeat, a.Kind);
                     TryFireFocusBonus(seat);
                     break;
@@ -645,7 +682,7 @@ namespace SandKill.Core
                         CardType expect = a.Kind == ActionKind.PoisonAttack ? CardType.Witch : CardType.Arsenal;
                         var probe = me.Hand.FirstOrDefault(c => c.Id == a.SourceCardId && c.Type == expect);
                         if (probe == null || (a.Kind == ActionKind.PoisonAttack && probe.PoisonUsed && !free)) return;
-                        var card = PaySkill(me, a.SourceCardId, cost, expect, free);
+                        var card = PaySkill(me, a.SourceCardId, cost, free, expect, CardType.Priestess);
                         if (card == null) return;
                         if (a.Kind == ActionKind.PoisonAttack && !free) card.PoisonUsed = true;   // save期间：不进冷却（整局限定不消耗）
                         DoAttack(seat, a.TargetSeat, a.Kind);
@@ -655,7 +692,7 @@ namespace SandKill.Core
                 case ActionKind.Exorcise:
                     {
                         if (!ValidTarget(seat, a.TargetSeat)) return;
-                        var card = PaySkill(me, a.SourceCardId, COST_EXORCISE, CardType.Exorcist, free);
+                        var card = PaySkill(me, a.SourceCardId, COST_EXORCISE, free, CardType.Exorcist);
                         if (card == null) return;
                         RaiseHostile(seat, a.TargetSeat, a.Kind);
                         ResolveExorcise(seat, a.TargetSeat);
@@ -664,7 +701,7 @@ namespace SandKill.Core
                 case ActionKind.Seize:
                     {
                         if (!ValidTarget(seat, a.TargetSeat)) return;
-                        var card = PaySkill(me, a.SourceCardId, COST_SEIZE, CardType.Police, free);
+                        var card = PaySkill(me, a.SourceCardId, COST_SEIZE, free, CardType.Police);
                         if (card == null) return;
                         RaiseHostile(seat, a.TargetSeat, a.Kind);
                         ResolveSeize(seat, a.TargetSeat);
@@ -675,7 +712,7 @@ namespace SandKill.Core
                         // 先查有没有可救的（上一回合内阵亡），没有就直接空过——不能白扣蓝
                         var options = DiscardOptions(seat, includePriest: true, freshSince: me.LastTurnStamp);
                         if (options.Count == 0) return;
-                        var card = PaySkill(me, a.SourceCardId, COST_ANTIDOTE, CardType.Witch, free);
+                        var card = PaySkill(me, a.SourceCardId, COST_ANTIDOTE, free, CardType.Witch, CardType.Priestess);
                         if (card == null || (card.AntidoteUsed && !free)) return;
                         if (!free) card.AntidoteUsed = true;   // save期间：不进冷却
                         Log(me.Name + " 使用女巫·解药：救活了一张上一回合内阵亡的角色牌。");
@@ -684,7 +721,7 @@ namespace SandKill.Core
                     }
                 case ActionKind.Bribe:
                     {
-                        var card = PaySkill(me, a.SourceCardId, COST_BRIBE, CardType.Minister, free);
+                        var card = PaySkill(me, a.SourceCardId, COST_BRIBE, free, CardType.Minister);
                         if (card == null) return;
                         me.LastBribeTurn = me.OwnTurnCount;   // 2026-10-14④ 每回合限1次（按座位）
                         ResolveBribe(seat, a.TargetSeat, a.SecondCardId);
@@ -692,7 +729,7 @@ namespace SandKill.Core
                     }
                 case ActionKind.Extort:
                     {
-                        var card = PaySkill(me, a.SourceCardId, COST_EXTORT, CardType.GrandMinister, free);
+                        var card = PaySkill(me, a.SourceCardId, COST_EXTORT, free, CardType.GrandMinister);
                         if (card == null || (card.ExtortUsed && !free)) return;   // 限定技：整局一次（save期间不消耗）
                         if (!free) card.ExtortUsed = true;
                         ResolveExtort(seat, a.TargetType);
@@ -701,7 +738,7 @@ namespace SandKill.Core
                 case ActionKind.ArmGuard:
                     {
                         if (ArmGuardAuraAll) return;   // 光环实验：布防常驻，主动技不再存在
-                        var card = PaySkill(me, a.SourceCardId, COST_ARMGUARD, CardType.ArmedGuard, free);
+                        var card = PaySkill(me, a.SourceCardId, COST_ARMGUARD, free, CardType.ArmedGuard);
                         if (card == null || _armGuard.Contains(seat)) return;
                         _armGuard.Add(seat);
                         Log(me.Name + " 发动【带刀侍卫】：1回合内，自己的侍卫和大臣获得亡语“攻击1次”。");
@@ -709,7 +746,7 @@ namespace SandKill.Core
                     }
                 case ActionKind.Hide:
                     {
-                        var card = PaySkill(me, a.SourceCardId, COST_HIDE, CardType.Warden, free);
+                        var card = PaySkill(me, a.SourceCardId, COST_HIDE, free, CardType.Warden);
                         if (card == null) return;
                         var hide = me.Hand.FirstOrDefault(c => c.Id == a.SecondCardId && c.Type != CardType.Hero);
                         if (hide == null || hide.Id == card.Id || hide.LastGuardedTurn == me.OwnTurnCount - 1
@@ -749,8 +786,8 @@ namespace SandKill.Core
                     break;
                 case ActionKind.Craft:
                     {
-                        // 合成：1行动点 + 配方3张牌 → 一张2点生命的合成牌 + 奖励（2026-10-14 定稿=方案C护盾；
-                        // CraftRewardStyle[seat]==0 时回退为奖励抽1张牌；历史"奖励工人"方案已废止——工人是牌库常驻牌×3）
+                        // 合成：1行动点 + 配方牌 → 一张2点生命的合成牌。2026-10-23 用户裁定：合成奖励（方案C护盾）只保留给
+                        // 典狱长（唯一3合1）；其余合成牌降格2合1后不再给奖励（历史方案0抽牌/1工人已废止，CraftRewardStyle 仅对典狱长有意义）。
                         if (me.MP < COST_CRAFT) return;
                         var cost = CraftCost(seat, a.TargetType, a.SourceCardId);
                         if (cost == null) return;
@@ -758,45 +795,25 @@ namespace SandKill.Core
                         NoteApSpent(me);
                         foreach (var c in cost) { me.Hand.Remove(c); ToDiscard(c); }
                         var synth = new Card(_nextSynthId++, a.TargetType) { SynthHP = SYNTH_HP };
+                        if (a.TargetType == CardType.Priestess)
+                        {
+                            // 2026-10-23 女祭司重做：继承合成材料中女巫的剩余双药（"药如果没用掉才继承，用掉了就没了"）
+                            var w = cost.FirstOrDefault(x => x.Type == CardType.Witch);
+                            synth.PoisonUsed = w != null && w.PoisonUsed;
+                            synth.AntidoteUsed = w != null && w.AntidoteUsed;
+                        }
                         me.Hand.Add(synth);
                         string drew = "";
-                        if (CraftRewardStyle[seat] == 2)
+                        if (a.TargetType == CardType.Jailer && CraftRewardStyle[seat] == 2)
                         {
                             // 方案C（2026-10-13 用户设计）：护盾持续X回合，吸收1点伤害——保护本体（HP）与整个手牌（攻击被整个吞掉，不抽牌）
                             me.ShieldCharges = CRAFT_SHIELD_CHARGES;
                             me.ShieldExpireOwnTurn = me.OwnTurnCount + CRAFT_SHIELD_TURNS;
+                            me.ShieldSourceSeat = -1;
                             drew = "，获得【护盾】：持续 " + CRAFT_SHIELD_TURNS + " 回合，可吸收 " + CRAFT_SHIELD_CHARGES + " 点伤害（保护本体与整个手牌）";
                         }
-                        else if (SideDeck.Count > 0)
-                        {
-                            var rc = SideDeck[0]; SideDeck.RemoveAt(0); me.Hand.Add(rc);
-                            drew = "，奖励抽了1张牌";
-                        }
-                        else drew = "（牌堆已空，无奖励牌）";
                         Log(me.Name + " 消耗1行动点，将 " + string.Join("＋", cost.Select(c => "【" + c.Type.Name() + "】"))
                             + " 合成了【" + a.TargetType.Name() + "】（" + SYNTH_HP + "点生命）" + drew + "！");
-                        break;
-                    }
-                case ActionKind.SynthRevive:
-                    {
-                        // 女祭司·复活（限定技）：从弃牌堆复活1张角色牌（不限阵亡时间，区别于女巫解药）
-                        var options = DiscardOptions(seat, includePriest: true);
-                        if (options.Count == 0) return;
-                        var card = PaySkill(me, a.SourceCardId, COST_SYNTH_SKILL, CardType.Priestess, free);
-                        if (card == null || (card.ReviveUsed && !free)) return;
-                        if (!free) card.ReviveUsed = true;   // save期间：不进冷却（整局限定不消耗）
-                        Log(me.Name + " 发动【女祭司·复活】：从弃牌堆复活1张角色牌。");
-                        OfferDiscardPick(me, options, "女祭司·复活");
-                        break;
-                    }
-                case ActionKind.SynthPrayer:
-                    {
-                        // 女祭司·祈祷（限定技）：2回合后（自己的第2个回合开始）自身1点生命转化为英雄1点生命
-                        var card = PaySkill(me, a.SourceCardId, COST_SYNTH_SKILL, CardType.Priestess, free);
-                        if (card == null || (card.PrayerUsed && !free) || card.SynthHP <= 0) return;
-                        if (!free) card.PrayerUsed = true;
-                        card.PrayerDueTurn = me.OwnTurnCount + 2;
-                        Log(me.Name + " 发动【女祭司·祈祷】：2回合后，女祭司将把1点自身生命转化为英雄的1点生命。");
                         break;
                     }
                 case ActionKind.SynthHostage:
@@ -804,7 +821,7 @@ namespace SandKill.Core
                         // 典狱长·扣押（2回合冷却，2026-10-14 用户裁定削弱停战软锁）：对方1张随机非英雄牌来作人质并封印，
                         // 人质扣2回合——原拥有者的第2个回合结束归还解封
                         if (!ValidTarget(seat, a.TargetSeat)) return;
-                        var card = PaySkill(me, a.SourceCardId, COST_SYNTH_SKILL, CardType.Jailer, free);
+                        var card = PaySkill(me, a.SourceCardId, COST_SYNTH_SKILL, free, CardType.Jailer);
                         if (card == null) return;
                         card.SeizeStamp = me.OwnTurnCount;
                         RaiseHostile(seat, a.TargetSeat, a.Kind);
@@ -815,7 +832,7 @@ namespace SandKill.Core
                     {
                         // 审判官·审判：随机揭示对手1张牌，亡灵/女巫（异端）则处决
                         if (!ValidTarget(seat, a.TargetSeat)) return;
-                        var card = PaySkill(me, a.SourceCardId, COST_SYNTH_SKILL, CardType.Inquisitor, free);
+                        var card = PaySkill(me, a.SourceCardId, COST_SYNTH_SKILL, free, CardType.Inquisitor);
                         if (card == null) return;
                         RaiseHostile(seat, a.TargetSeat, a.Kind);
                         ResolveJudge(seat, a.TargetSeat);
@@ -825,7 +842,7 @@ namespace SandKill.Core
                     {
                         // 恐怖分子·安放炸弹（2026-10-13 用户改版）：2回合后爆炸，对每个敌手各发动1次无来源随机攻击（等同普攻，
                         // 随机抽1张手牌正常结算，不记仇），恐怖分子自己同归于尽。触发器绑定在安放者身上（到安放者的回合检查恐怖分子还活不活）。
-                        var card = PaySkill(me, a.SourceCardId, COST_BOMB, CardType.Terrorist, free);
+                        var card = PaySkill(me, a.SourceCardId, COST_BOMB, free, CardType.Terrorist);
                         if (card == null || card.BombActive) return;
                         card.BombActive = true;
                         card.BombPlanter = seat;
@@ -836,15 +853,15 @@ namespace SandKill.Core
             }
         }
 
-        Card PaySkill(PlayerState me, int cardId, int cost, CardType expect, bool free = false)
+        Card PaySkill(PlayerState me, int cardId, int cost, bool free, params CardType[] expect)
         {
-            var card = me.Hand.FirstOrDefault(c => c.Id == cardId && c.Type == expect);
+            var card = me.Hand.FirstOrDefault(c => c.Id == cardId && expect.Contains(c.Type));
             if (card == null) return null;
-            if (!free && card.UsedSkillTurn == _turnStamp) return null;   // save期间才允许同卡连发
+            if (!free && card.UsedSkillTurn == _effStamp[me.Seat]) return null;   // save期间才允许同卡连发；生效戳：冻结窗口内不刷新（2026-10-23）
             if (me.MP < cost) return null;                       // 蓝耗照付
             me.MP -= cost;
             NoteApSpent(me);
-            card.UsedSkillTurn = _turnStamp;
+            card.UsedSkillTurn = _effStamp[me.Seat];
             return card;
         }
 
@@ -968,10 +985,11 @@ namespace SandKill.Core
         // 各种结算
         // ------------------------------------------------------------------
 
-        /// <summary>英雄升级（2026-10-21 用户裁定）：seat 消灭 n 张牌攒经验，
-        /// 消灭 6 张升 2 级、再攒到 8 张升 3 级（每局最多升 2 次）。
-        /// 计入渠道（草样口径）：攻击抽走/挡刀消耗/处决（驱魔·猎巫/审判官/冷酷追猎）/炸弹毁牌；
-        /// 不计入：合成消耗/弃牌/淘汰遗物/青苹果被抢（没进弃牌堆）。EXP 封顶 8 不再累积。</summary>
+        /// <summary>英雄升级（2026-10-21 用户裁定；2026-10-23 修订）：seat 消灭 n 张牌攒经验，
+        /// 消灭 6 张升 2 级、再攒到 9 张升 3 级（每局最多升 2 次）。
+        /// 计入渠道：攻击抽走/挡刀消耗/处决（驱魔·猎巫/审判官/冷酷追猎）/炸弹毁牌；
+        /// 合成牌阵亡计 2 EXP（2026-10-23 用户裁定：等级系统的头号大敌=2HP打一下不死还提供屏障）；
+        /// 不计入：合成消耗/弃牌/淘汰遗物/青苹果被抢（没进弃牌堆）。EXP 封顶 9 不再累积。</summary>
         void AddExp(int seat, int n)
         {
             var p = Players[seat];
@@ -988,19 +1006,17 @@ namespace SandKill.Core
             }
         }
 
-        /// <summary>升级奖励（2026-10-21 用户裁定）：2代升2级与升3级相同=方案C护盾。
-        /// 3代引擎覆写为：升2级=1技能点；升3级=1技能点+回1点英雄HP。</summary>
+        /// <summary>升级奖励（2026-10-23 用户裁定）：2代升2级与升3级相同=回复英雄1点HP（原方案C护盾退役——与3代对齐，
+        /// 替代青苹果的中期回血生态位，预计环境略提速）。3代引擎覆写为：1技能点+回1点英雄HP。</summary>
         protected virtual void GrantLevelUpReward(PlayerState p, int level)
         {
-            p.ShieldCharges = CRAFT_SHIELD_CHARGES;
-            p.ShieldExpireOwnTurn = p.OwnTurnCount + LEVEL_SHIELD_TURNS;
+            HealHero(p, 1);
         }
 
         /// <summary>升级奖励的播报文案（与 GrantLevelUpReward 同步覆写）。level=本次升级后的 HeroLevel（1=升2级，2=升3级）。</summary>
         protected virtual string LevelUpRewardText(int level)
         {
-            return "获得【护盾】：持续 " + LEVEL_SHIELD_TURNS + " 回合，可吸收 " + CRAFT_SHIELD_CHARGES
-                + " 点伤害（保护本体与整个手牌）。";
+            return "回复 1 点英雄HP！";
         }
 
         /// <summary>英雄回血（封顶英雄HP上限 HeroHP）。</summary>
@@ -1052,7 +1068,7 @@ namespace SandKill.Core
                 && v.Hand.Count(c => c.Type != CardType.Hero) <= 5)
             {
                 _lastHitBy[victimSeat] = attackerSeat;   // 击杀归属（凯旋判定）
-                if (TryAbsorbShield(victimSeat, "这次攻击")) return;
+                if (TryAbsorbShield(victimSeat, "这次攻击", attackerSeat)) return;
                 v.HP--;
                 _apSinceHurt[v.Seat] = 0;   // 医师：受伤重置行动点计数
                 NoteAppleCountdown(v);
@@ -1061,9 +1077,14 @@ namespace SandKill.Core
                 CheckElimination(v);
                 return;
             }
-            var pool = v.Hand.Where(c => c.GuardProtectTurn < 0).ToList();   // 守卫护住的牌不参与抽牌判定
-            if (pool.Count == 0) return;   // 手牌全部被护（英雄牌无法被护，实际不会发生）
-            var drawn = pool[_rng.Next(pool.Count)];
+            var pool = v.Hand.Where(c => !IsRandomUnselectable(c)).ToList();   // 守卫护住/被标记的牌不参与随机抽牌判定
+            Card drawn;
+            if (_forceDrawn != null && v.Hand.Contains(_forceDrawn)) drawn = _forceDrawn;   // gen3 攻击被标记牌：定向选取，绕过随机池
+            else
+            {
+                if (pool.Count == 0) return;   // 手牌全部被护/标记（英雄牌无法被护，实际不会发生）
+                drawn = pool[_rng.Next(pool.Count)];
+            }
             ResolveAttackAfterGuardRoll(attackerSeat, victimSeat, drawn, kind);
         }
 
@@ -1073,7 +1094,7 @@ namespace SandKill.Core
             var v = Players[victimSeat];
             _lastHitBy[victimSeat] = attackerSeat;   // 击杀归属（凯旋判定）：普攻/军火库/毒药/强攻追加/炸弹的公共入口
             // 方案C护盾（2026-10-13）：攻击落到本体之前先判定吸收——整个攻击被吞掉（不抽牌、不掉HP、不消耗挡刀身体）
-            if (TryAbsorbShield(victimSeat, "这次攻击")) return;
+            if (TryAbsorbShield(victimSeat, "这次攻击", attackerSeat)) return;
             // （旧"魅惑=主目标出侍卫挡刀"实现已于 2026-10-19 废弃：改为攻击重定向到魅惑目标走完整流程，见 ResolveAttack。）
             // 被沉默者：挡刀身体全部失效；被封印的牌同样不能挡。
             // 挡刀身体：侍卫；合成牌女武神/圣骑士（人人可用）；牺牲英雄的牧师（PriestSacStyle 决定先后）。
@@ -1170,7 +1191,7 @@ namespace SandKill.Core
                 }
                 v.Hand.Remove(drawn);
                 ToDiscard(drawn);
-                AddExp(attackerSeat, 1);   // 英雄升级：攻击抽走
+                AddExp(attackerSeat, drawn.SynthHP >= 0 ? 2 : 1);   // 英雄升级：攻击抽走（合成牌阵亡2EXP，2026-10-23）
                 Log(Players[attackerSeat].Name + " 抽走了 " + v.Name + " 的【" + drawn.Type.Name() + "】——生命耗尽，进入弃牌堆！");
                 if (drawn.Type == CardType.Paladin)
                 {
@@ -1190,21 +1211,23 @@ namespace SandKill.Core
             }
             v.Hand.Remove(drawn);
             ToDiscard(drawn);
-            AddExp(attackerSeat, 1);   // 英雄升级：攻击抽走
+            AddExp(attackerSeat, drawn.SynthHP >= 0 ? 2 : 1);   // 英雄升级：攻击抽走（合成牌阵亡2EXP，2026-10-23）
             Log(Players[attackerSeat].Name + " 抽走了 " + v.Name + " 的【" + drawn.Type.Name() + "】，进入弃牌堆。");
             if (victimSilenced || cardSealed)
             {
                 // 被沉默（整个人或单张牌）：亡语不触发
             }
-            else if (drawn.Type == CardType.Priest || drawn.Type == CardType.Paladin)
+            else if (drawn.Type == CardType.Priest || drawn.Type == CardType.Paladin || drawn.Type == CardType.Priestess)
             {
-                // 牧师/圣骑士亡语：不能回收英雄牌，也不能回收牧师（杜绝套娃）
-                var options = DiscardOptions(v.Seat, includePriest: false).Where(c => c.Id != drawn.Id).ToList();
-                if (options.Count == 0) Log("牧师亡语触发，但弃牌堆没有可回收的角色牌。");
+                // 牧师/圣骑士/女祭司亡语：不能回收英雄牌，也不能回收牧师与女祭司（杜绝套娃）。
+                // 女祭司亡语来自 2026-10-23 重做（继承女巫双药 + 牧师亡语）。
+                var options = DiscardOptions(v.Seat, includePriest: false)
+                    .Where(c => c.Id != drawn.Id && c.Type != CardType.Priestess).ToList();
+                if (options.Count == 0) Log("【" + drawn.Type.Name() + "】亡语触发，但弃牌堆没有可回收的角色牌。");
                 else
                 {
-                    Log(v.Name + " 的牧师亡语触发。");
-                    OfferDiscardPick(v, options, "牧师亡语");
+                    Log(v.Name + " 的【" + drawn.Type.Name() + "】亡语触发。");
+                    OfferDiscardPick(v, options, drawn.Type.Name() + "亡语");
                 }
             }
             else if ((drawn.Type == CardType.Guard || drawn.Type == CardType.Minister
@@ -1224,9 +1247,13 @@ namespace SandKill.Core
         {
             bomb.BombActive = false;
             int planter = bomb.BombPlanter;
-            if (Discard.Contains(bomb))
+            // 防御性兜底：StartTurn 的到期炸弹列表是快照，结算第一枚时其冲击波/亡语反击可能把另一枚
+            // 待引爆的恐怖分子抽进弃牌堆（ResetForNewLife 清掉 Planter/Due），快照里的第二枚再进来时
+            // planter 已非法——按既定规则"恐怖分子阵亡则炸弹失效"走哑弹分支。
+            if (planter < 0 || planter >= Players.Count || Discard.Contains(bomb))
             {
-                Log(Players[planter].Name + " 的炸弹没能引爆：【恐怖分子】已先于爆炸阵亡，成了一枚哑弹。");
+                Log((planter >= 0 && planter < Players.Count ? Players[planter].Name + " 的" : "一枚")
+                    + "炸弹没能引爆：【恐怖分子】已先于爆炸阵亡，成了一枚哑弹。");
                 return;
             }
             Log(Players[planter].Name + " 的炸弹引爆了！");
@@ -1252,7 +1279,7 @@ namespace SandKill.Core
                 _blastQueue.RemoveAt(0);
                 var v = Players[hit.Victim];
                 if (!v.Alive || v.Hand.Count == 0) continue;
-                var pool = v.Hand.Where(c => c.GuardProtectTurn < 0).ToList();   // 守卫护住的牌不参与抽牌判定
+                var pool = v.Hand.Where(c => !IsRandomUnselectable(c)).ToList();   // 守卫护住/被标记的牌不参与随机抽牌判定
                 if (pool.Count == 0) continue;
                 var drawn = pool[_rng.Next(pool.Count)];
                 Log("炸弹的冲击波袭向 " + v.Name + "！");
@@ -1262,7 +1289,7 @@ namespace SandKill.Core
                     v.Hand.Remove(drawn);
                     drawn.AppleTimer = -1;
                     ToDiscard(drawn);
-                    AddExp(hit.Planter, 1);   // 英雄升级：炸弹毁牌
+                    AddExp(hit.Planter, drawn.SynthHP >= 0 ? 2 : 1);   // 英雄升级：炸弹毁牌（合成牌2EXP，2026-10-23）
                     Log(v.Name + " 的【青苹果】被炸成了碎片，进入弃牌堆（倒数取消）。");
                     continue;
                 }
@@ -1306,26 +1333,26 @@ namespace SandKill.Core
                 }
                 v.Hand.Remove(shield);
                 ToDiscard(shield);
-                AddExp(attackerSeat, 1);   // 英雄升级：挡刀消耗
+                AddExp(attackerSeat, shield.SynthHP >= 0 ? 2 : 1);   // 英雄升级：挡刀消耗（合成牌阵亡2EXP，2026-10-23）
                 Log(v.Name + " 的【" + shield.Type.Name() + "】生命耗尽，代替进入了弃牌堆！");
-                if (shield.Type == CardType.Paladin)
+                if (shield.Type == CardType.Paladin || shield.Type == CardType.Priestess)
                 {
-                    // 圣骑士亡语：进入弃牌堆就触发——生命耗尽被消耗也算。套娃防护：亡语不含圣骑士。
+                    // 圣骑士/女祭司亡语：进入弃牌堆就触发——生命耗尽被消耗也算。套娃防护：亡语不含圣骑士/女祭司。
                     var options = DiscardOptions(v.Seat, includePriest: false)
-                        .Where(c => c.Id != shield.Id && c.Type != CardType.Paladin)
+                        .Where(c => c.Id != shield.Id && c.Type != CardType.Paladin && c.Type != CardType.Priestess)
                         .ToList();
-                    if (options.Count == 0) Log("圣骑士亡语触发，但弃牌堆没有可回收的角色牌。");
+                    if (options.Count == 0) Log("【" + shield.Type.Name() + "】亡语触发，但弃牌堆没有可回收的角色牌。");
                     else
                     {
-                        Log(v.Name + " 的【圣骑士】亡语触发。");
-                        OfferDiscardPick(v, options, "圣骑士亡语");
+                        Log(v.Name + " 的【" + shield.Type.Name() + "】亡语触发。");
+                        OfferDiscardPick(v, options, shield.Type.Name() + "亡语");
                     }
                 }
                 return;
             }
             v.Hand.Remove(shield);
             ToDiscard(shield);
-            AddExp(attackerSeat, 1);   // 英雄升级：挡刀消耗
+            AddExp(attackerSeat, shield.SynthHP >= 0 ? 2 : 1);   // 英雄升级：挡刀消耗（合成牌阵亡2EXP，2026-10-23）
             Log(v.Name + " 的【" + shield.Type.Name() + "】挺身而出，代替进入弃牌堆！");
             if (shield.Type == CardType.Guard && HasArmGuard(v.Seat) && !_silenced.Contains(v.Seat)) DeathrattleAttack(v.Seat);
             if (shield.Type == CardType.Priest)
@@ -1379,7 +1406,7 @@ namespace SandKill.Core
         void ResolveExorcise(int exorcistSeat, int targetSeat)
         {
             var t = Players[targetSeat];
-            var pool = t.Hand.Where(c => c.GuardProtectTurn < 0).ToList();   // 守卫护住的牌不参与抽牌判定
+            var pool = t.Hand.Where(c => !IsRandomUnselectable(c)).ToList();   // 守卫护住/被标记的牌不参与随机抽牌判定
             if (pool.Count == 0) return;
             var c = pool[_rng.Next(pool.Count)];
             if (OnIntel != null) OnIntel(exorcistSeat, targetSeat, c.Type);   // 抽到的牌型公开播报（含亡灵）
@@ -1388,7 +1415,7 @@ namespace SandKill.Core
             {
                 t.Hand.Remove(c);
                 ToDiscard(c);
-                AddExp(exorcistSeat, 1);   // 英雄升级：处决
+                AddExp(exorcistSeat, c.SynthHP >= 0 ? 2 : 1);   // 英雄升级：处决（合成牌2EXP，2026-10-23）
                 Log(Players[exorcistSeat].Name + " 的驱魔师当场处决了 " + t.Name + " 的【" + c.Type.Name() + "】！");
             }
             else
@@ -1401,7 +1428,7 @@ namespace SandKill.Core
         {
             var t = Players[targetSeat];
             // 随机选一张非英雄牌封印；命中的牌型公开播报（与驱魔师一致）。守卫护住的牌不参与选取。
-            var c = t.Hand.Where(x => x.Type != CardType.Hero && x.GuardProtectTurn < 0).OrderBy(_ => _rng.Next()).FirstOrDefault();
+            var c = t.Hand.Where(x => x.Type != CardType.Hero && !IsRandomUnselectable(x)).OrderBy(_ => _rng.Next()).FirstOrDefault();
             if (c == null)
             {
                 Log(Players[seizerSeat].Name + " 的警察找不到可沉默的牌（对方只剩英雄牌），行动落空。");
@@ -1422,7 +1449,7 @@ namespace SandKill.Core
         void ResolveHostage(int takerSeat, int targetSeat)
         {
             var t = Players[targetSeat];
-            var c = t.Hand.Where(x => x.Type != CardType.Hero && x.GuardProtectTurn < 0).OrderBy(_ => _rng.Next()).FirstOrDefault();
+            var c = t.Hand.Where(x => x.Type != CardType.Hero && !IsRandomUnselectable(x)).OrderBy(_ => _rng.Next()).FirstOrDefault();
             if (c == null)
             {
                 Log(Players[takerSeat].Name + " 的典狱长找不到可扣押的牌（对方只剩英雄牌），行动落空。");
@@ -1445,7 +1472,7 @@ namespace SandKill.Core
         void ResolveJudge(int judgeSeat, int targetSeat)
         {
             var t = Players[targetSeat];
-            var pool = t.Hand.Where(c => c.GuardProtectTurn < 0).ToList();   // 守卫护住的牌不参与揭示判定
+            var pool = t.Hand.Where(c => !IsRandomUnselectable(c)).ToList();   // 守卫护住/被标记的牌不参与随机揭示判定
             if (pool.Count == 0) return;
             var c = pool[_rng.Next(pool.Count)];
             if (OnIntel != null) OnIntel(judgeSeat, targetSeat, c.Type);   // 揭示的牌型公开播报
@@ -1453,7 +1480,7 @@ namespace SandKill.Core
             {
                 t.Hand.Remove(c);
                 ToDiscard(c);
-                AddExp(judgeSeat, 1);   // 英雄升级：处决
+                AddExp(judgeSeat, c.SynthHP >= 0 ? 2 : 1);   // 英雄升级：处决（合成牌2EXP，2026-10-23）
                 Log(Players[judgeSeat].Name + " 的【审判官】揭示了 " + t.Name + " 的【" + c.Type.Name() + "】——异端！当场处决，进入弃牌堆。");
             }
             else
@@ -1502,7 +1529,7 @@ namespace SandKill.Core
                 if (type == CardType.Hero)
                 {
                     _lastHitBy[o.Seat] = extorterSeat;   // 击杀归属（凯旋判定）
-                    if (!TryAbsorbShield(o.Seat, "勒索的1点英雄伤害"))
+                    if (!TryAbsorbShield(o.Seat, "勒索的1点英雄伤害", extorterSeat))
                     {
                         o.HP--;
                         _apSinceHurt[o.Seat] = 0;   // 医师：受伤重置行动点计数
@@ -1713,7 +1740,7 @@ namespace SandKill.Core
                         victimCard.SealedBy = -1;
                         _silencedCards.Remove(victimCard);
                         ToDiscard(victimCard);
-                        AddExp(Current, 1);   // 英雄升级：处决
+                        AddExp(Current, victimCard.SynthHP >= 0 ? 2 : 1);   // 英雄升级：处决（合成牌2EXP，2026-10-23）
                         Log("【冷酷追猎】" + hunter.Name + " 的行动点耗尽且本回合未普攻——处决了 " + owner.Name
                             + " 被封印的【" + victimCard.Type.Name() + "】！");
                     }
@@ -1741,12 +1768,15 @@ namespace SandKill.Core
         /// <summary>方案C护盾（2026-10-13 用户设计）：尝试吸收1次对玩家的伤害。有充能时吸收成功（扣1充能）并播报。
         /// 吸收范围：任何攻击实例（普攻/毒药/军火库/强攻追加/炸弹随机攻击——在抽牌前整个吞掉，同时保护本体HP与整个手牌），
         /// 以及勒索【英雄】的1点直伤。到期/吸满即消散（Charges=0）。</summary>
-        bool TryAbsorbShield(int victimSeat, string sourceDesc)
+        bool TryAbsorbShield(int victimSeat, string sourceDesc, int sourceSeat = -1)
         {
             var v = Players[victimSeat];
             if (v.ShieldCharges <= 0) return false;
+            // 2026-10-23 风墙定向护盾：只吸收来自指定玩家（ShieldSourceSeat）的伤害；普通护盾 sourceSeat=-1 不定向。
+            if (v.ShieldSourceSeat >= 0 && sourceSeat >= 0 && v.ShieldSourceSeat != sourceSeat) return false;
             v.ShieldCharges--;
-            Log(v.Name + " 的【护盾】吸收了" + sourceDesc + "（护盾耗尽）！");
+            if (v.ShieldCharges <= 0) v.ShieldSourceSeat = -1;
+            Log(v.Name + " 的【护盾】吸收了" + sourceDesc + (v.ShieldCharges > 0 ? "（剩余 " + v.ShieldCharges + " 点）" : "（护盾耗尽）") + "！");
             return true;
         }
 
@@ -1764,6 +1794,7 @@ namespace SandKill.Core
                 var kp = Players[killer];
                 kp.ShieldCharges = 1;
                 kp.ShieldExpireOwnTurn = kp.OwnTurnCount + TRIUMPH_SHIELD_TURNS;
+                kp.ShieldSourceSeat = -1;
                 Log(kp.Name + " 的英雄【凯旋】奏凯：获得【护盾】（持续 " + TRIUMPH_SHIELD_TURNS + " 回合，吸收1点伤害）！");
                 var spoils = p.Hand.Where(c => c.Type != CardType.Hero).ToList();   // 英雄牌随主人退场，不可挑选
                 if (spoils.Count > 0)

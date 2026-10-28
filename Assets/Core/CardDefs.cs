@@ -125,7 +125,7 @@ namespace SandKill.Core
                 Type = CardType.GreenApple, Name = "青苹果", IsRole = true,
                 SkillCost = 0, SubSkillCost = -1, SkillTag = "", PassiveTag = "受伤倒数",
                 SkillDesc = "",
-                PassiveDesc = "被动：你受伤后开始2回合倒数（再次受伤不会打断），倒数结束自动吃掉它，回复1点HP。它被攻击抽中时不会进入弃牌堆，而是被攻击者抢走。" } },
+                PassiveDesc = "被动：你受伤后开始2回合倒数（再次受伤不会打断），倒数结束自动吃掉它，回复1点HP。它被攻击抽中时不会进入弃牌堆，而是被攻击者抢走。【2026-10-23 退环境：不再进入标准牌库——升级奖励改为回血后替代其中期生态位；引擎机制保留，自定义牌库仍可使用】" } },
 
             { CardType.Terrorist, new CardDef {
                 Type = CardType.Terrorist, Name = "恐怖分子", IsRole = true,
@@ -135,9 +135,9 @@ namespace SandKill.Core
 
             { CardType.Priestess, new CardDef {
                 Type = CardType.Priestess, Name = "女祭司", IsRole = true,
-                SkillCost = 1, SubSkillCost = 1, SkillTag = "复活/祈祷", PassiveTag = "",
-                SkillDesc = "主动（双限定技，各限1次）：【复活】1行动点，从弃牌堆复活1张角色牌；【祈祷】1行动点，2回合后将自身1点生命转化为英雄的1点生命（自身共2点生命，耗尽则女祭司消失）。",
-                PassiveDesc = "" } },
+                SkillCost = 1, SubSkillCost = 1, SkillTag = "继承双药", PassiveTag = "牧师亡语",
+                SkillDesc = "合成配方：女巫＋牧师（2026-10-23 由3合1降为2合1，青苹果移出配方）。主动（继承自合成材料中的女巫，各限1次）：【毒药】1行动点=额外攻击一次；【解药】1行动点=救活上一回合内阵亡的角色牌——只继承合成时女巫还没用掉的药（\"药如果没用掉才继承，用掉了就没了\"）。",
+                PassiveDesc = "被动：拥有【牧师】同款亡语——生命耗尽进入弃牌堆时（挡刀消耗或被攻击抽中），从弃牌堆回收1张角色牌（不能回收牧师、女祭司和英雄）。自身共2点生命。" } },
 
             { CardType.Valkyrie, new CardDef {
                 Type = CardType.Valkyrie, Name = "女武神", IsRole = true,
@@ -149,7 +149,7 @@ namespace SandKill.Core
                 Type = CardType.Paladin, Name = "圣骑士", IsRole = true,
                 SkillCost = 0, SubSkillCost = -1, SkillTag = "", PassiveTag = "挡刀·亡语",
                 SkillDesc = "",
-                PassiveDesc = "被动：2点生命——挡刀或被攻击直接抽中均消耗1点生命，生命耗尽进入弃牌堆时触发【牧师】同款亡语（被攻击抽走也算）：从弃牌堆回收一张角色牌（不能回收牧师、圣骑士和英雄）。" } },
+                PassiveDesc = "合成配方：侍卫＋牧师（2026-10-23 由3合1降为2合1）。被动：2点生命——挡刀或被攻击直接抽中均消耗1点生命，生命耗尽进入弃牌堆时触发【牧师】同款亡语（被攻击抽走也算）：从弃牌堆回收一张角色牌（不能回收牧师、圣骑士和英雄）。" } },
 
             { CardType.Jailer, new CardDef {
                 Type = CardType.Jailer, Name = "典狱长", IsRole = true,
@@ -160,24 +160,24 @@ namespace SandKill.Core
             { CardType.Inquisitor, new CardDef {
                 Type = CardType.Inquisitor, Name = "审判官", IsRole = true,
                 SkillCost = 1, SubSkillCost = -1, SkillTag = "审判", PassiveTag = "",
-                SkillDesc = "主动：1行动点，随机揭示对手1张手牌；若是【亡灵】或【女巫】（异端），将其当场处决进入弃牌堆。揭示的牌型公开播报。",
+                SkillDesc = "合成配方：驱魔师＋侍女（2026-10-23 由3合1降为2合1，牧师移出配方——加强垫底合成牌）。主动：1行动点，随机揭示对手1张手牌；若是【亡灵】或【女巫】（异端），将其当场处决进入弃牌堆。揭示的牌型公开播报。",
                 PassiveDesc = "" } },
 
             // ---- 法术牌（3代·法术迸发 2026-10-20）：释放后直接消耗；未学会前是纯白板 ----
             { CardType.Alchemy, new CardDef {
                 Type = CardType.Alchemy, Name = "炼金术", IsRole = false,
                 SkillCost = 1, SubSkillCost = -1, SkillTag = "可释放", PassiveTag = "法术",
-                SkillDesc = "法术（1行动点）：通用法术——释放时选择一种你已研习的法术，当场以该法术的效果结算（只付炼金术这1点行动点，不必再付被模仿法术的行动点）。你研习过的任何法术，炼金术都相当于那张法术（不含炼金术自身；彗星是被动反制，不可模仿）。释放后炼金术消耗掉。未研习任何法术时无法释放。",
+                SkillDesc = "【2026-10-23 退环境：不再进入3代标准牌库（法术槽位有限）】。原效果：法术（1行动点）：通用法术——释放时选择一种你已研习的法术，当场以该法术的效果结算。",
                 PassiveDesc = "" } },
             { CardType.Clarity, new CardDef {
                 Type = CardType.Clarity, Name = "清晰术", IsRole = false,
                 SkillCost = 1, SubSkillCost = -1, SkillTag = "可释放", PassiveTag = "法术",
-                SkillDesc = "法术（1行动点）：立刻查看牌库最上方的3张牌，从中选择1张加入你的手牌（其余按原顺序放回库顶）。释放后法术牌消耗掉。",
+                SkillDesc = "【2026-10-23 退环境：不再进入3代标准牌库】；其「标记」机制由【点燃】继承——被标记的牌无法被随机选取、但可被定向攻击。",
                 PassiveDesc = "" } },
             { CardType.Ignite, new CardDef {
                 Type = CardType.Ignite, Name = "点燃", IsRole = false,
                 SkillCost = 1, SubSkillCost = -1, SkillTag = "可释放", PassiveTag = "法术",
-                SkillDesc = "法术（1行动点）：选择一名对手——若其手牌中有【军火库】，当场将其引爆（直接进弃牌堆，不触发攻击效果）；随后查看其2张手牌并选择其中1张点燃：2回合后这张牌阵亡（若届时其手牌中有军火库则同步炸毁）。释放后法术牌消耗掉。",
+                SkillDesc = "法术（1行动点，2026-10-23 重做）：查看对手2张手牌（随机亮出，不足全亮），选择其中1张点燃——被点牌获得2回合【标记】（无法被随机选取、可被定向攻击），2回合后受到1点伤害（走完整结算：经验/亡语/淘汰照常）；若选中的是【军火库】或【英雄】牌，则立刻造成1点伤害、不产生标记。释放后法术牌消耗掉。",
                 PassiveDesc = "" } },
             { CardType.Thunder, new CardDef {
                 Type = CardType.Thunder, Name = "雷霆", IsRole = false,
@@ -190,9 +190,19 @@ namespace SandKill.Core
                 SkillDesc = "法术（不耗行动点）：当有人释放法术时，你可以消耗1张【彗星】抵消那个法术（被抵消的法术直接消耗、效果不结算）。需先研习（learn）获得反制权限。",
                 PassiveDesc = "被动（反制）：有人释放法术时，可消耗本牌抵消之，不耗行动点。未研习前不可反制。" } },
             { CardType.Barrier, new CardDef {
-                Type = CardType.Barrier, Name = "屏障", IsRole = false,
+                Type = CardType.Barrier, Name = "风墙", IsRole = false,
                 SkillCost = 1, SubSkillCost = -1, SkillTag = "可释放", PassiveTag = "法术",
-                SkillDesc = "法术（1行动点）：获得1点持续2回合的护盾（可吸收1点伤害，保护本体与整个手牌；与合成/升级护盾同口径）。释放后法术牌消耗掉。",
+                SkillDesc = "法术（1行动点，2026-10-23 由「屏障」更名重做）：选择一名玩家——获得持续2回合的2点【定向护盾】：只能吸收来自该玩家的伤害（普攻/军火库/毒药/强攻追加/勒索直伤均可被吸收；其余来源的伤害照常结算）。释放后法术牌消耗掉。",
+                PassiveDesc = "" } },
+            { CardType.Glacier, new CardDef {
+                Type = CardType.Glacier, Name = "冰川", IsRole = false,
+                SkillCost = 1, SubSkillCost = -1, SkillTag = "可释放", PassiveTag = "法术",
+                SkillDesc = "法术（1行动点，2026-10-23 新增）：选择一名对手——其下2个回合合并为1个：回合照常轮到它（抽牌/倒数/联盟扣减等照常），但行动点不回满，所有每回合限1次的行动（普通攻击/警察/驱魔等）也不刷新；它可自主分配这两回合的行动点（如前3后0、前2后1、前0后3）。不能对已被冰川冻结的目标叠加释放。释放后法术牌消耗掉。",
+                PassiveDesc = "" } },
+            { CardType.Heal, new CardDef {
+                Type = CardType.Heal, Name = "治疗术", IsRole = false,
+                SkillCost = 1, SubSkillCost = -1, SkillTag = "可释放", PassiveTag = "法术",
+                SkillDesc = "法术（1行动点，2026-10-23 新增）：立刻为你的英雄回复1点HP（满血时无效果）。替代青苹果的中期回血生态位，与等级系统兼容——偏后期瞬发回复手段。释放后法术牌消耗掉。",
                 PassiveDesc = "" } },
         };
 

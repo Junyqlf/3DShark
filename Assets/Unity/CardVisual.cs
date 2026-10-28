@@ -48,12 +48,14 @@ namespace SandKill.Unity
             { CardType.GreenApple,    new Def { Bg = new Color(0.25f, 0.8f, 0.62f),  Text = DarkText, Icon = "apple" } },   // 青色卡背
             { CardType.Terrorist,     new Def { Bg = new Color(0.9f, 0.5f, 0.12f),  Text = Color.white, Icon = "bomb" } },  // 橙色卡背
             // 3代·法术迸发（2026-10-21）：法术牌统一冷色调底，与角色牌区分
-            { CardType.Alchemy,       new Def { Bg = new Color(0.35f, 0.6f, 0.75f),  Text = Color.white } },   // 炼金术·青蓝
-            { CardType.Clarity,       new Def { Bg = new Color(0.55f, 0.8f, 0.9f),   Text = DarkText } },      // 清晰术·冰青
+            { CardType.Alchemy,       new Def { Bg = new Color(0.35f, 0.6f, 0.75f),  Text = Color.white } },   // 炼金术·青蓝（2026-10-23 退环境，配色保留）
+            { CardType.Clarity,       new Def { Bg = new Color(0.55f, 0.8f, 0.9f),   Text = DarkText } },      // 清晰术·冰青（2026-10-23 退环境，配色保留）
             { CardType.Ignite,        new Def { Bg = new Color(0.85f, 0.35f, 0.15f),  Text = Color.white, Icon = "flame" } },    // 点燃·火橙
             { CardType.Thunder,       new Def { Bg = new Color(0.5f, 0.5f, 0.85f),   Text = Color.white, Icon = "lightning" } }, // 雷霆·紫蓝
             { CardType.Comet,         new Def { Bg = new Color(0.2f, 0.22f, 0.35f),  Text = Color.white } },   // 彗星·夜空
-            { CardType.Barrier,       new Def { Bg = new Color(0.45f, 0.75f, 0.55f),  Text = DarkText } },     // 屏障·薄荷绿
+            { CardType.Barrier,       new Def { Bg = new Color(0.45f, 0.75f, 0.55f),  Text = DarkText, Icon = "wind" } },     // 风墙（原屏障）·薄荷绿
+            { CardType.Glacier,       new Def { Bg = new Color(0.6f, 0.85f, 0.95f),  Text = DarkText, Icon = "snow" } },     // 冰川·冰蓝（2026-10-23）
+            { CardType.Heal,          new Def { Bg = new Color(0.55f, 0.9f, 0.6f),   Text = DarkText, Icon = "heal" } },      // 治疗术·嫩绿（2026-10-23）
         };
 
         /// <summary>查表：这张牌长什么样。没登记的牌给灰色兜底，界面永远能渲染。</summary>

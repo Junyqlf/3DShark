@@ -26,9 +26,10 @@ namespace SandKill.Core
         // ---- 合成奖励·方案C护盾（2026-10-13）：Charges=剩余吸收次数，ExpireOwnTurn=有效至自己的第N回合开始 ----
         public int ShieldCharges;
         public int ShieldExpireOwnTurn;
+        public int ShieldSourceSeat = -1;   // 风墙定向护盾（2026-10-23）：只吸收来自该座位的伤害；-1=不定向（合成/升级/凯旋护盾）
 
-        // ---- 英雄升级（2026-10-21 用户裁定）：消灭6张升2级、8张升3级，每局最多升2次 ----
-        public int EXP;                // 已消灭计数（封顶 GameEngine2.XP_LEVEL_3=8）
+        // ---- 英雄升级（2026-10-23 修订）：消灭6张升2级、累计9张升3级，每局最多升2次 ----
+        public int EXP;                // 已消灭计数（封顶 GameEngine2.XP_LEVEL_3=9）
         public int HeroLevel;          // 已升级次数：0=初始(1级) / 1=2级 / 2=3级（升满）
         public int LevelTurn = -1;     // 最近一次升级时自己的 OwnTurnCount（攻城锤额外普攻窗口以此为锚）
 

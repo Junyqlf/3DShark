@@ -447,7 +447,7 @@ namespace SandKill.Unity
                 "每局随机分配1名英雄，带专属被动/限定技，是重复游玩的核心。\n" +
                 "点击英雄牌本体 = 发动英雄技 / 查看信息。\n\n" +
                 "【合成牌】\n" +
-                "消耗1行动点＋配方指定的3张牌 → 合成1张2点生命的合成牌，并获得【护盾】：持续2回合，吸收1点伤害（保护本体与整个手牌）。\n" +
+                "消耗1行动点＋配方牌 → 合成1张2点生命的合成牌（2026-10-23：圣骑士/女武神/女祭司/审判官=2合1无奖励；仅典狱长3合1，合成后获得【护盾】：持续2回合，吸收1点伤害，保护本体与整个手牌）。\n" +
                 "点击【合成】按钮查看当前可合成的配方。\n\n" +
                 "【快捷键】\n" +
                 "空格 = 结束回合　　M = 规则帮助　　Esc = 退出游戏";
@@ -468,7 +468,7 @@ namespace SandKill.Unity
                 sb.AppendLine(def.DisplayDesc);
                 sb.AppendLine();
             }
-            sb.AppendLine("【合成牌】不在牌库中，由配方合成（1行动点＋3张配方牌，合成后获得2回合护盾）");
+            sb.AppendLine("【合成牌】不在牌库中，由配方合成（1行动点＋配方牌：圣骑士/女武神/女祭司/审判官=2合1，典狱长=3合1——仅典狱长合成后获得2回合护盾）");
             foreach (CardType t in new[] { CardType.Priestess, CardType.Valkyrie, CardType.Paladin,
                                            CardType.Jailer, CardType.Inquisitor })
             {
@@ -1151,28 +1151,18 @@ namespace SandKill.Unity
             var def = CardDefs.Of(c.Type);
             switch (c.Type)
             {
-                case CardType.Alchemy:
-                    if (acts.Count == 0) { SpellInfoModal(c, "现在无法释放：需要先研习其它法术（炼金术=当场化作你已学会的任意法术），且蓝够、未被沉默。"); return; }
-                    _modalSticky = true;
-                    ShowModalBase("炼金术（1蓝）", def.SkillDesc);
-                    foreach (var t in GameEngine3.SpellTypes.Where(x => x != CardType.Alchemy && x != CardType.Comet
-                                                                     && acts.Any(x2 => x2.TargetType == x)))
-                    {
-                        var tt = t;
-                        var same = acts.Where(x2 => x2.TargetType == tt).ToList();
-                        if (same.Count == 1)
-                            AddModalTextButton("化作【" + tt.Name() + "】释放",
-                                () => { _modalSticky = false; HideModal(); _e.ApplyAction(same[0]); Refresh(); });
-                        else
-                            AddModalTextButton("化作【" + tt.Name() + "】释放…",
-                                () => { _modalSticky = false; HideModal(); EnterTargeting(same); });
-                    }
-                    AddModalTextButton("取消", () => { _modalSticky = false; Refresh(); });
+                case CardType.Barrier:   // 风墙（2026-10-23 更名重做）：定向护盾，需选来源玩家
+                    if (acts.Count == 0) { SpellInfoModal(c, "现在无法释放：蓝不够、被沉默，或没有合法目标。"); return; }
+                    EnterTargeting(acts);
                     return;
-                case CardType.Barrier:
+                case CardType.Glacier:   // 冰川（2026-10-23 新增）：选一名未被冻结的对手
+                    if (acts.Count == 0) { SpellInfoModal(c, "现在无法释放：蓝不够、被沉默，或所有对手都已被冰川冻结。"); return; }
+                    EnterTargeting(acts);
+                    return;
+                case CardType.Heal:      // 治疗术（2026-10-23 新增）：无目标，立刻回1HP
                     if (acts.Count == 0) { SpellInfoModal(c, "现在无法释放：蓝不够或被沉默。"); return; }
                     _modalSticky = true;
-                    ShowModalBase("屏障（1蓝）", def.SkillDesc);
+                    ShowModalBase("治疗术（1蓝）", def.SkillDesc);
                     AddModalTextButton("释放", () => { _modalSticky = false; HideModal(); _e.ApplyAction(acts[0]); Refresh(); });
                     AddModalTextButton("取消", () => { _modalSticky = false; Refresh(); });
                     return;
@@ -1181,16 +1171,9 @@ namespace SandKill.Unity
                     EnterTargeting(acts);   // 按对手选目标，次数=其手牌数×25%四舍五入
                     return;
                 case CardType.Ignite:
-                    SpellPickSeatModal(c, "点燃（1蓝）：选择一名对手，随机缠上其手牌中的 1 张牌——2 回合后该牌阵亡（其手牌中的军火库同步炸毁）。", 1);
+                    SpellPickSeatModal(c, "点燃（1蓝）：选择一名对手——随机亮出其2张手牌选1张点燃：被点牌带2回合标记（无法被随机选取、可被定向攻击），2回合后受到1点伤害；选中军火库/英雄牌则立刻受到1点伤害。", 1);
                     return;
-                case CardType.Clarity:
-                    if (acts.Count == 0) { SpellInfoModal(c, "现在无法释放：蓝不够、被沉默，或牌库已空。"); return; }
-                    _modalSticky = true;
-                    ShowModalBase("清晰术（1蓝）", def.SkillDesc);
-                    AddModalTextButton("释放", () => { _modalSticky = false; HideModal(); _e.ApplyAction(acts[0]); Refresh(); });
-                    AddModalTextButton("取消", () => { _modalSticky = false; Refresh(); });
-                    return;
-                default:   // 彗星：纯被动反制，不可主动释放
+                default:   // 彗星：纯被动反制，不可主动释放；炼金术/清晰术已退环境（不会出现在牌库）
                     SpellInfoModal(c, null);
                     return;
             }
@@ -1236,19 +1219,8 @@ namespace SandKill.Unity
             var a = new GameAction { Kind = ActionKind.CastSpell, SourceCardId = spell.Id, TargetType = spell.Type };
             if (spell.Type == CardType.Ignite)
             {
-                var t = _e.Players[seats[0]];
-                var cand = t.Hand.Where(x => x.Type != CardType.Hero).ToList();
-                if (cand.Count == 0) return;
+                // 2026-10-23 重做：行动只带目标座位；2张亮牌与选1张在引擎内完成（真人弹 IgnitePick 抉择）
                 a.TargetSeat = seats[0];
-                a.SecondCardId = cand[UnityEngine.Random.Range(0, cand.Count)].Id;
-            }
-            else if (spell.Type == CardType.Clarity)
-            {
-                var c1 = _e.Players[seats[0]].Hand.Where(x => x.Type != CardType.Hero).ToList();
-                var c2 = _e.Players[seats[1]].Hand.Where(x => x.Type != CardType.Hero).ToList();
-                if (c1.Count == 0 || c2.Count == 0) return;
-                a.SecondCardId = c1[UnityEngine.Random.Range(0, c1.Count)].Id;
-                a.ThirdCardId = c2[UnityEngine.Random.Range(0, c2.Count)].Id;
             }
             _e.ApplyAction(a);
             Refresh();
@@ -1275,7 +1247,7 @@ namespace SandKill.Unity
             var crafts = _legal.Where(a => a.Kind == ActionKind.Craft).ToList();
             if (crafts.Count == 0) return;
             _modalSticky = true;
-            ShowModalBase("合  成", "消耗1行动点＋配方中的3张牌，合成一张2点生命的合成牌，并获得1点护盾（持续2回合，吸收1点伤害）：");
+            ShowModalBase("合  成", "消耗1行动点＋配方牌，合成一张2点生命的合成牌（2026-10-23：圣骑士/女武神/女祭司/审判官=2合1；仅典狱长3合1且合成后获得2回合护盾）：");
             foreach (var grp in crafts.GroupBy(a => a.TargetType))
             {
                 var synth = grp.Key;

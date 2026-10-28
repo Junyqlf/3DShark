@@ -9,14 +9,15 @@ namespace SandKill.Unity
     /// <summary>
     /// 3代「法术迸发」对局会话（2026-10-21）：组局、驱动回合循环。由 GameBootstrap.StartMode(2) 创建。
     /// 与2代（GameBootstrap2）并存：模式选择各自进入，互不影响。
-    /// 牌库 = 2代47张 + 法术14张（炼金1/清晰2/点燃3/雷霆3/彗星3/屏障3）= 61张：每人10张+英雄牌（比1/2代多1张，稀释补偿），剩余作牌堆。
+    /// 牌库 = 2代44张（2026-10-23 青苹果退环境）+ 法术17张（点燃3/雷霆3/彗星3/风墙3/冰川2/治疗术3；炼金术/清晰术同日退环境）= 61张：
+    /// 每人10张+英雄牌（比1/2代多1张，稀释补偿），剩余作牌堆。
     /// UI 复用 GameUI2（自动识别 GameEngine3 启用法术相关界面）。
     /// </summary>
     public class GameBootstrap3 : MonoBehaviour, IGameSession
     {
         float IGameSession.AttackBackswing { get { return AttackBackswing; } }   // 字段留给 Inspector，属性走接口
 
-        [Header("3代牌组（2代47张 + 法术14张 = 61张；2026-10-21 用户裁定：点燃/雷霆/彗星减至3张、新增屏障×3）")]
+        [Header("3代牌组（2代44张 + 法术17张 = 61张；2026-10-23 用户裁定：青苹果/炼金术/清晰术退环境，屏障更名风墙，新增冰川×2/治疗术×3）")]
         public int WorkerCount = 3;
         public int UndeadCount = 4;
         public int ExorcistCount = 4;
@@ -30,14 +31,14 @@ namespace SandKill.Unity
         public int GrandMinisterCount = 1;
         public int WardenCount = 3;
         public int MaidCount = 4;
-        public int GreenAppleCount = 3;
+        public int GreenAppleCount = 0;    // 青苹果：2026-10-23 退环境
         public int TerroristCount = 4;
-        public int AlchemyCount = 1;    // 炼金术×1
-        public int ClarityCount = 2;    // 清晰术×2
-        public int IgniteCount = 3;     // 点燃×3（2026-10-21 由4减至3）
-        public int ThunderCount = 3;    // 雷霆×3（2026-10-21 由4减至3）
-        public int CometCount = 3;      // 彗星×3（2026-10-21 由4减至3）
-        public int BarrierCount = 3;    // 屏障×3（2026-10-21 新增：1行动点获得1点持续2回合的护盾）
+        public int IgniteCount = 3;     // 点燃×3
+        public int ThunderCount = 3;    // 雷霆×3
+        public int CometCount = 3;      // 彗星×3
+        public int BarrierCount = 3;    // 风墙×3（2026-10-23 由"屏障"更名重做：2点定向护盾）
+        public int GlacierCount = 2;    // 冰川×2（2026-10-23 新增：目标下2回合合并、不刷新行动点与回合技）
+        public int HealCount = 3;       // 治疗术×3（2026-10-23 新增：立刻回复英雄1点HP）
 
         [Header("节奏")]
         public float AIDelay = 0.9f;
@@ -94,9 +95,9 @@ namespace SandKill.Unity
                 { CardType.Minister, MinisterCount }, { CardType.GrandMinister, GrandMinisterCount },
                 { CardType.Warden, WardenCount }, { CardType.Maid, MaidCount },
                 { CardType.GreenApple, GreenAppleCount }, { CardType.Terrorist, TerroristCount },
-                { CardType.Alchemy, AlchemyCount }, { CardType.Clarity, ClarityCount },
                 { CardType.Ignite, IgniteCount }, { CardType.Thunder, ThunderCount },
-                { CardType.Comet, CometCount }, { CardType.Barrier, BarrierCount }
+                { CardType.Comet, CometCount }, { CardType.Barrier, BarrierCount },
+                { CardType.Glacier, GlacierCount }, { CardType.Heal, HealCount }
             };
         }
 

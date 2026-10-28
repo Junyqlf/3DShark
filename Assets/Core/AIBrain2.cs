@@ -541,20 +541,19 @@ namespace SandKill.Core
                     if (a.TargetType == CardType.Inquisitor && me.HeroId == 5) continue;   // 猎巫行动英雄：审判官冗余
                     var cost = g.CraftCost(seat, a.TargetType, a.SourceCardId);   // "任意"位按合法行动指定的牌估价（便宜的第三张EV更高，自然入选）
                     if (cost == null) continue;
-                    // 合成奖励按座位方案计：0=抽1张牌（全库均值）/ 2=方案C护盾。
+                    // 2026-10-23 用户裁定：合成奖励（方案C护盾）只保留给典狱长（唯一3合1）；其余合成牌降格2合1后无奖励。
                     // 护盾EV=合成后手牌均值（2026-10-14 用户口径）：护盾吞掉的那次攻击本该抽走自己手牌随机一张，
                     // 保护对象=自己手牌（含英雄——英雄被抽中=1伤害，按全库均值平价计入；不设折扣倍率：
                     // 窗口内94%触发已实证，且无消耗/无暴露/不可被针对，仿军火库的0.75在这里没有机制基础）。
-                    float rewardEv;
-                    if (g.CraftRewardStyle[seat] == 2)
+                    float rewardEv = 0f;
+                    if (a.TargetType == CardType.Jailer && g.CraftRewardStyle[seat] == 2)
                     {
                         float postSum = me.Hand.Sum(x => (float)(x.Type == CardType.Hero ? DeckMean : KeepValue(x.Type)))
                                       - cost.Sum(c => (float)KeepValue(c.Type))
                                       + KeepValue(a.TargetType);
-                        float postCount = me.Hand.Count - cost.Count + 1;   // -3配方 +1合成牌
+                        float postCount = me.Hand.Count - cost.Count + 1;   // -配方 +1合成牌
                         rewardEv = postSum / postCount;
                     }
-                    else rewardEv = DeckMean;
                     float ev = KeepValue(a.TargetType) + rewardEv - cost.Sum(c => (float)OwnCardValue(c, me));
                     if (a.TargetType == CardType.Inquisitor)
                         ev += ExpectedInEnemyHands(g, me, CardType.Witch) + ExpectedInEnemyHands(g, me, CardType.Undead);   // 外面每个女巫/亡灵各+1分（2026-10-13 用户：审判官2HP身体强化捉鬼任务）
@@ -563,17 +562,8 @@ namespace SandKill.Core
                 }
             }
 
-            // 10.6 合成牌技能：女祭司双限定技 / 典狱长扣押 / 审判官审判
-            var srv = legal.FirstOrDefault(a => a.Kind == ActionKind.SynthRevive);
-            if (srv != null)
-            {
-                int bestVal = g.Discard.Where(c => c.Type.IsRole() && c.Type != CardType.Hero)
-                                       .Select(c => KeepValue(c.Type)).DefaultIfEmpty(0).Max();
-                if (bestVal >= 5) cart.Add(new CartItem(srv, bestVal - 1f, 0));   // 限定技：只捞高价值
-            }
-            var sp = legal.FirstOrDefault(a => a.Kind == ActionKind.SynthPrayer);
-            if (sp != null && me.HP < me.MaxHP)
-                cart.Add(new CartItem(sp, 1.5f, 0));   // 延迟2回合的回血，满血不放
+            // 10.6 合成牌技能：典狱长扣押 / 审判官审判（女祭司双限定技已于 2026-10-23 移除——
+            // 继承的女巫双药走通用毒药/解药分支自动入车，无需专项）
             var hos = legal.Where(a => a.Kind == ActionKind.SynthHostage).ToList();
             if (hos.Count > 0 && (!_mod.ResourceDiscipline || me.MP >= GameEngine2.COST_BASIC_ATTACK + GameEngine2.COST_SYNTH_SKILL))
                 cart.Add(new CartItem(PickAttackTarget(hos, g, me), atkEv * 0.7f, 0));   // 人质=偷1张牌+封印1回合
@@ -594,9 +584,8 @@ namespace SandKill.Core
                 foreach (var a in legal.Where(x => x.Kind == ActionKind.Learn))
                 {
                     if (!me.Hand.Any(c => c.Type == a.TargetType)) continue;   // 手里没这张法术牌，学了也白学
-                    // 炼金术是通用法术：先学其它法术再学它，否则无物可模仿（引擎同样禁止空手释放）
-                    if (a.TargetType == CardType.Alchemy
-                        && !GameEngine3.SpellTypes.Any(t => t != CardType.Alchemy && g3.HasSpell(seat, t))) continue;
+                    // 2026-10-23：治疗术只在血量不健康时才学（用户裁定"偏后期瞬发回复"）
+                    if (a.TargetType == CardType.Heal && me.HP >= me.MaxHP) continue;
                     float learnEv = SpellLearnEv(a.TargetType) - GameEngine3.COST_LEARN;
                     if (learnEv > 0) cart.Add(new CartItem(a, learnEv, 0));
                 }
@@ -637,40 +626,42 @@ namespace SandKill.Core
         }
 
         /// <summary>3代法术的研习价值基准（2026-10-21 用户口径，与 SpellCastEv 同源；learn 入车时再扣1行动点成本）。
-        /// 2026-10-22 中午炼金术重做：通用法术位，研习价=5（配合先学其它法术的门禁，net 4）。</summary>
+        /// 2026-10-23 大包：炼金术/清晰术退环境移除；新增冰川/治疗术=5（可调）。</summary>
         static float SpellLearnEv(CardType t)
         {
             switch (t)
             {
                 case CardType.Ignite: return 6f;
                 case CardType.Thunder: return 6f;
-                case CardType.Clarity: return 6f;
-                case CardType.Barrier: return 5f;
+                case CardType.Barrier: return 5f;   // 风墙（定向2点护盾）
+                case CardType.Glacier: return 5f;   // 2026-10-23 新增：节奏压制（可调）
+                case CardType.Heal: return 5f;      // 2026-10-23 新增：瞬发回血（learn 另有满血门禁，可调）
                 case CardType.Comet: return 5f;   // 2026-10-21 用户裁定：彗星也是法术牌，反制需研习——给反制潜力一个中位基准价（可调）
-                case CardType.Alchemy: return 5f; // 2026-10-22 重做：泛用复制位，net learn EV=4（可调）
                 default: return 0f;
             }
         }
 
-        /// <summary>3代法术施法 EV（2026-10-21 用户口径；2026-10-22 中午炼金术重做并入）：
-        /// 屏障固定5；清晰术固定6；
+        /// <summary>3代法术施法 EV（2026-10-21 用户口径；2026-10-23 大包修订）：
+        /// 风墙（定向2点护盾）固定5；治疗术=满血0/不满5（learn 已门禁，这里是双保险）；
         /// 雷霆按"能对目标造成的伤害点数"查表：1点=1分、2点=6分、3点=11分（每多1点+5分）；
-        /// 点燃：目标手牌里有军火库=8分，否则2分；
-        /// 炼金术=通用法术：合法行动的 TargetType 已是被模仿法术，天然命中对应 case 按真法术计价（无折扣）。</summary>
+        /// 点燃（2026-10-23 用户口径）：目标手牌里有军火库=6分，否则5分（加强常态、削弱针对）；
+        /// 冰川（2026-10-23 新增）固定5：冻结目标2回合的行动点/回合技刷新（可调）。</summary>
         static float SpellCastEv(GameEngine3 g3, GameAction a)
         {
             switch (a.TargetType)
             {
                 case CardType.Barrier: return 5f;
-                case CardType.Clarity: return 6f;
+                case CardType.Heal:
+                    return g3.Players[g3.Current].HP < g3.Players[g3.Current].MaxHP ? 5f : 0f;
                 case CardType.Ignite:
-                    return g3.Players[a.TargetSeat].Hand.Any(c => c.Type == CardType.Arsenal) ? 8f : 2f;
+                    return g3.Players[a.TargetSeat].Hand.Any(c => c.Type == CardType.Arsenal) ? 6f : 5f;
+                case CardType.Glacier: return 5f;
                 case CardType.Thunder:
                     {
                         int times = (int)Math.Round(g3.Players[a.TargetSeat].Hand.Count * 0.25, MidpointRounding.AwayFromZero);
                         return times <= 0 ? 0f : 5f * times - 4f;
                     }
-                default: return 0f;   // 炼金术的合法行动 TargetType=被模仿法术，已在上面各 case 计价
+                default: return 0f;
             }
         }
 
@@ -1095,7 +1086,7 @@ namespace SandKill.Core
                 { CardType.Police, 4 }, { CardType.Guard, 4 }, { CardType.Witch, 3 },
                 { CardType.Arsenal, 1 }, { CardType.ArmedGuard, 1 }, { CardType.Minister, 4 },
                 { CardType.GrandMinister, 1 }, { CardType.Warden, 3 }, { CardType.Maid, 4 },
-                { CardType.GreenApple, 3 }, { CardType.Terrorist, 4 }
+                { CardType.Terrorist, 4 }   // 2026-10-23：青苹果退环境（44张标准牌库）
             };
             int n = 0, v = 0;
             foreach (var kv in counts) { n += kv.Value; v += kv.Value * KeepValue(kv.Key); }
