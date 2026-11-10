@@ -57,38 +57,45 @@ namespace SandKill.Unity
 
             // 模式按钮
             MakeButton(root, "初代 · 经典模式", () => _boot.StartMode(0),
-                new Color(0.85f, 0.6f, 0.18f), 28, -230, 40, 230, 108);
+                new Color(0.85f, 0.6f, 0.18f), 28, -230, 76, 230, 144);
             var desc1 = UIKit.UIObj("Desc1", root);
-            UIKit.SetRect(desc1, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(-300, 4), new Vector2(300, 34));
+            UIKit.SetRect(desc1, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(-300, 40), new Vector2(300, 70));
             UIKit.AddText(desc1, "最初的规则：一手好牌与神抽，纯粹的消耗战（可玩）", 16, new Color(0.55f, 0.6f, 0.65f), TextAnchor.MiddleCenter, _font);
 
             MakeButton(root, "二代 · 英雄登场", () => _boot.StartMode(1),
-                new Color(0.55f, 0.45f, 0.75f), 28, -230, -78, 230, -10);
+                new Color(0.55f, 0.45f, 0.75f), 28, -230, -42, 230, 26);
             var desc2 = UIKit.UIObj("Desc2", root);
-            UIKit.SetRect(desc2, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(-300, -114), new Vector2(300, -84));
+            UIKit.SetRect(desc2, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(-300, -78), new Vector2(300, -48));
             UIKit.AddText(desc2, "随机英雄 · HP/MP系统 · 合成牌 · 英雄升级（6消灭升2级得护盾、8消灭升3级回血）（可玩，支持 3/4 人局）", 16, new Color(0.55f, 0.6f, 0.65f), TextAnchor.MiddleCenter, _font);
 
             // 三代·法术迸发（2026-10-21 上线）：2代全部规则 + 法术牌/技能点/learn/彗星反制
             MakeButton(root, "三代 · 法术迸发", () => _boot.StartMode(2),
-                new Color(0.3f, 0.55f, 0.65f), 28, -230, -196, 230, -128);
+                new Color(0.3f, 0.55f, 0.65f), 28, -230, -160, 230, -92);
             var desc3 = UIKit.UIObj("Desc3", root);
-            UIKit.SetRect(desc3, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(-300, -232), new Vector2(300, -202));
+            UIKit.SetRect(desc3, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(-300, -196), new Vector2(300, -166));
             UIKit.AddText(desc3, "2代规则 + 6种法术牌 · 升级得技能点 · learn 研习 · 彗星反制（可玩，支持 3/4 人局）", 16, new Color(0.55f, 0.6f, 0.65f), TextAnchor.MiddleCenter, _font);
+
+            // 2.5D 棋盘试验场（2026-11-09）：三代引擎 + 云顶之弈式斜俯视 3D 牌桌，从头做的表现层
+            MakeButton(root, "2.5D · 棋盘试验场", () => _boot.StartMode(3),
+                new Color(0.25f, 0.5f, 0.4f), 28, -230, -278, 230, -210);
+            var desc4 = UIKit.UIObj("Desc4", root);
+            UIKit.SetRect(desc4, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(-300, -314), new Vector2(300, -284));
+            UIKit.AddText(desc4, "3代规则 + 3D牌桌/手牌扇形/英雄台座（建设中：可对局，特效与动画逐步迁移）", 16, new Color(0.55f, 0.6f, 0.65f), TextAnchor.MiddleCenter, _font);
 
             // 对手数量选择
             var aiLabel = UIKit.UIObj("AILabel", root);
-            UIKit.SetRect(aiLabel, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(-230, -300), new Vector2(-30, -252));
+            UIKit.SetRect(aiLabel, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(-230, -378), new Vector2(-30, -330));
             UIKit.AddText(aiLabel, "对手数量", 20, new Color(0.8f, 0.82f, 0.85f), TextAnchor.MiddleRight, _font);
 
             _ai2Btn = MakeButton(root, "2 个 AI", () => SetAICount(2),
-                Color.clear, 20, -20, -300, 180, -252);
+                Color.clear, 20, -20, -378, 180, -330);
             _ai3Btn = MakeButton(root, "3 个 AI", () => SetAICount(3),
-                Color.clear, 20, 190, -300, 390, -252);
+                Color.clear, 20, 190, -378, 390, -330);
             RefreshAIToggle();
 
             // 退出
             MakeButton(root, "退出游戏", () => Application.Quit(),
-                new Color(0.55f, 0.3f, 0.3f), 20, -100, -400, 100, -352);
+                new Color(0.55f, 0.3f, 0.3f), 20, -100, -458, 100, -410);
         }
 
         void SetAICount(int n)

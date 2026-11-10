@@ -143,10 +143,6 @@ namespace SandKill.Core
         readonly HashSet<int> _freeSkills = new HashSet<int>(); // save：本回合技能免费不限次
         // 守卫"藏牌"已于 2026-10-15 改版为"无法选取"状态：牌不再离开手牌，状态记在 Card.GuardProtectTurn 上，无独立存储。
         readonly List<Hostage> _hostages = new List<Hostage>();  // 典狱长的人质：牌 + 原拥有者座位 + 归还回合（原拥有者的"第2个回合结束"归还解封）
-        /// <summary>炸弹冲击波队列（2026-10-13② 改版）：爆炸=对每个敌手各1次"无来源随机攻击"（等同普攻流程，可挡刀），
-        /// 队列逐个结算；人类座位弹出抉择时暂停，提交后从断点续炸。</summary>
-        class BlastHit { public int Planter; public int Victim; }
-        readonly List<BlastHit> _blastQueue = new List<BlastHit>();
         /// <summary>合成牌复活平衡（2026-10-08 用户设计定稿=1），按座位：0=可复活合成牌（旧规则，测试用）/ 1=禁止复活合成牌（默认）/ 2=复活后只剩1点生命。作用于所有弃牌堆回收渠道（牧师/圣骑士亡语、女巫解药、女祭司复活）。</summary>
         public int[] ReviveSynthStyle;
         /// <summary>合成奖励方案（2026-10-13 方案C对照试验 → 2026-10-14 用户裁定定稿=2）：0=奖励抽1张牌 / 2=获得【护盾】（持续X回合吸收1点伤害）。
@@ -278,7 +274,7 @@ namespace SandKill.Core
         public int TotalCards { get { return Players.Sum(p => p.Hand.Count(c => c.SynthHP < 0)) + Discard.Count(c => c.SynthHP < 0) + SideDeck.Count; } }
 
         /// <summary>典狱长的人质：被扣押的牌与其原拥有者（归还/解封计时依据）。</summary>
-        class Hostage { public Card Card; public int OwnerSeat; public int ReleaseTurn; }   // ReleaseTurn = 原拥有者 OwnTurnCount ≥ 此值的那个回合结束归还（2026-10-14：扣押2回合冷却/人质扣2回合）
+        class Hostage { public Card Card; public int OwnerSeat; public int KeeperSeat; public int ReleaseTurn; }   // ReleaseTurn = 原拥有者 OwnTurnCount ≥ 此值的那个回合结束归还（2026-10-14：扣押2回合冷却/人质扣2回合）；KeeperSeat=扣押者（2026-11-09：炸弹跟人质走需要知道现任持有者）
 
         /// <summary>seat 合成 synth 实际需要消耗的手牌：固定配方按类型各取1张（"任意"位指定的牌优先让位给固定槽，避免一张牌被算两次）；
         /// "任意"位取 wildId 指定的牌（玩家手动选择，必须是自己手牌里的非英雄牌），wildId≤0 时退回第一张未被选用的非英雄牌。
@@ -585,8 +581,9 @@ namespace SandKill.Core
                                 list.Add(new GameAction { Kind = ActionKind.SynthJudge, TargetSeat = t.Seat, SourceCardId = c.Id });
                         break;
                     case CardType.Terrorist:
-                        // 安放炸弹（2026-10-13 改版）：一张恐怖分子同时只能有一枚炸弹在倒数
-                        if (!c.BombActive && me.MP >= COST_BOMB)
+                        // 安放炸弹（2026-11-09 限定技版）：每张恐怖分子整局限安放1次（TerrorPlantUsed），
+                        // 且一张同时只能有一枚炸弹在倒数；拆弹不返还次数。
+                        if (!c.BombActive && !c.TerrorPlantUsed && me.MP >= COST_BOMB)
                             list.Add(new GameAction { Kind = ActionKind.BombPlant, SourceCardId = c.Id });
                         break;
                 }
@@ -840,14 +837,18 @@ namespace SandKill.Core
                     }
                 case ActionKind.BombPlant:
                     {
-                        // 恐怖分子·安放炸弹（2026-10-13 用户改版）：2回合后爆炸，对每个敌手各发动1次无来源随机攻击（等同普攻，
-                        // 随机抽1张手牌正常结算，不记仇），恐怖分子自己同归于尽。触发器绑定在安放者身上（到安放者的回合检查恐怖分子还活不活）。
+                        // 恐怖分子·安放炸弹（2026-11-09 用户改版）：限定技（每张整局限1次，拆弹不返还）——
+                        // 2回合后爆炸：对炸弹现任持有者的所有敌方英雄各造成1点直接伤害（无视挡刀/2生命身体/亡灵免疫；
+                        // 护盾可吸收，风墙不吸收——无来源不属于"指定玩家的伤害"），恐怖分子自己同归于尽。
+                        // 炸弹跟着牌走：安放后被大臣贿赂送人，爆炸以新持有者的敌我划线（可能炸回安放者自己）。
+                        // 触发器绑定在安放者身上（到安放者的回合检查恐怖分子还活不活）。
                         var card = PaySkill(me, a.SourceCardId, COST_BOMB, free, CardType.Terrorist);
-                        if (card == null || card.BombActive) return;
+                        if (card == null || card.BombActive || card.TerrorPlantUsed) return;
                         card.BombActive = true;
                         card.BombPlanter = seat;
                         card.BombDueTurn = me.OwnTurnCount + 2;
-                        Log(me.Name + " 的【恐怖分子】安放了一枚炸弹：2回合后爆炸，对每个敌手各发动1次无来源随机攻击——等同普攻，随机抽1张手牌正常结算（恐怖分子自己也将同归于尽）！");
+                        card.TerrorPlantUsed = true;
+                        Log(me.Name + " 的【恐怖分子】安放了一枚炸弹（限定技，整局限此1次）：2回合后爆炸，对持有者的所有敌方英雄各造成1点直接伤害——恐怖分子自己也将同归于尽！");
                         break;
                     }
             }
@@ -1238,16 +1239,18 @@ namespace SandKill.Core
             CheckElimination(v);
         }
 
-        /// <summary>恐怖分子炸弹结算（2026-10-13 用户改版）：到安放者的回合检查恐怖分子还活不活。
-        /// 活着（在任何玩家手里/被藏/作人质都算）→ 爆炸：恐怖分子自己进弃牌堆（被大臣贿赂送人也不改目标），
-        /// 然后对每个敌手（以安放者的敌我划线）各发动1次"无来源随机攻击"——等同普攻：随机抽1张手牌，
-        /// 挡刀/2生命身体/亡灵免疫/亡语全部照常结算，但不记仇（无来源，AI不会因此寻仇安放者）；
-        /// 已进弃牌堆（被抽走/处决等）→ 哑弹，效果自然消失（不退蓝不返还）。</summary>
+        /// <summary>恐怖分子炸弹结算（2026-11-09 用户改版）：到安放者的回合检查恐怖分子还活不活。
+        /// 活着（在任何玩家手里/被护住/作人质都算——人质牌在扣押者手牌里，天然覆盖）→ 爆炸：
+        /// 恐怖分子自己进弃牌堆，然后对炸弹【现任持有者】的所有敌方英雄各造成1点直接伤害——
+        /// 不再走随机抽牌：无视挡刀/2生命身体/亡灵免疫；普通护盾可吸收1点，风墙（定向护盾）不吸收无来源伤害；
+        /// 无记仇事件（AI不会寻仇安放者），但击杀归属记安放者（凯旋照常结算）；无牌被消灭，不产生升级EXP。
+        /// "炸弹跟着牌走"（2026-11-09）：安放后被大臣贿赂送人，爆炸以新持有者的敌我划线——可能炸回安放者自己。
+        /// 已进弃牌堆（被抽走/处决等）→ 哑弹，效果自然消失（不退蓝；安放是限定技，拆弹不返还次数）。</summary>
         void ResolveBomb(Card bomb)
         {
             bomb.BombActive = false;
             int planter = bomb.BombPlanter;
-            // 防御性兜底：StartTurn 的到期炸弹列表是快照，结算第一枚时其冲击波/亡语反击可能把另一枚
+            // 防御性兜底：StartTurn 的到期炸弹列表是快照，结算第一枚时其它结算可能把另一枚
             // 待引爆的恐怖分子抽进弃牌堆（ResetForNewLife 清掉 Planter/Due），快照里的第二枚再进来时
             // planter 已非法——按既定规则"恐怖分子阵亡则炸弹失效"走哑弹分支。
             if (planter < 0 || planter >= Players.Count || Discard.Contains(bomb))
@@ -1256,50 +1259,30 @@ namespace SandKill.Core
                     + "炸弹没能引爆：【恐怖分子】已先于爆炸阵亡，成了一枚哑弹。");
                 return;
             }
-            Log(Players[planter].Name + " 的炸弹引爆了！");
-            // 从它现在所在的位置取出（可能在别人手里——被贿赂/扣押不改变爆炸目标）
+            // 现任持有者：牌在谁手里就以谁的敌我划线（人质牌在扣押者手牌里，同样覆盖）
+            int holder = Players.FindIndex(pl => pl.Hand.Contains(bomb));
+            if (holder < 0)
+            {
+                var h = _hostages.FirstOrDefault(x => x.Card == bomb);
+                holder = h != null ? h.KeeperSeat : planter;   // 兜底：正常路径牌必在某人手里
+            }
+            Log(Players[planter].Name + " 的炸弹引爆了（现由 " + Players[holder].Name + " 持有）！");
             foreach (var pl in Players) pl.Hand.Remove(bomb);
             var hostage = _hostages.FirstOrDefault(x => x.Card == bomb);
             if (hostage != null) _hostages.Remove(hostage);
             ToDiscard(bomb);
             Log("【恐怖分子】与敌同归于尽，进入了弃牌堆。");
-            // 冲击波入队（可能接在前一发暂停的队列后面），逐个结算
-            foreach (var o in Players.Where(x => x.Alive && x.Seat != planter))
-                _blastQueue.Add(new BlastHit { Planter = planter, Victim = o.Seat });
-            ContinueBlast();
-        }
-
-        /// <summary>炸弹冲击波逐个结算。人类座位弹出抉择时暂停（Pending != null 即返回），
-        /// 由三个 Submit* 提交点在清掉 Pending 后调用本方法从断点续炸。</summary>
-        void ContinueBlast()
-        {
-            while (_blastQueue.Count > 0 && Pending == null && !GameOver)
+            foreach (var o in Players.Where(x => x.Alive && x.Seat != holder).ToList())
             {
-                var hit = _blastQueue[0];
-                _blastQueue.RemoveAt(0);
-                var v = Players[hit.Victim];
-                if (!v.Alive || v.Hand.Count == 0) continue;
-                var pool = v.Hand.Where(c => !IsRandomUnselectable(c)).ToList();   // 守卫护住/被标记的牌不参与随机抽牌判定
-                if (pool.Count == 0) continue;
-                var drawn = pool[_rng.Next(pool.Count)];
-                Log("炸弹的冲击波袭向 " + v.Name + "！");
-                if (drawn.Type == CardType.GreenApple)
-                {
-                    // 无来源攻击：青苹果不被"抢走"，而是被当场炸毁（倒数取消，进弃牌堆）
-                    v.Hand.Remove(drawn);
-                    drawn.AppleTimer = -1;
-                    ToDiscard(drawn);
-                    AddExp(hit.Planter, drawn.SynthHP >= 0 ? 2 : 1);   // 英雄升级：炸弹毁牌（合成牌2EXP，2026-10-23）
-                    Log(v.Name + " 的【青苹果】被炸成了碎片，进入弃牌堆（倒数取消）。");
-                    continue;
-                }
-                // 等同普攻：挡刀判定（人类弹Pending暂停 / AI同步决策），拒挡才走进 ResolveDrawn
-                ResolveAttackAfterGuardRoll(hit.Planter, v.Seat, drawn, ActionKind.Attack);
+                Log("炸弹的冲击波直击 " + o.Name + " 的英雄：1点伤害！");
+                if (TryAbsorbShield(o.Seat, "炸弹冲击波", noSource: true)) continue;
+                o.HP--;
+                _lastHitBy[o.Seat] = planter;   // 击杀归属记安放者（凯旋可结算）
+                CheckElimination(o);
             }
-            if (_blastQueue.Count == 0 || GameOver) _blastQueue.Clear();
         }
 
-        /// <summary>炸弹被拆除：倒数中断，本回合已用标记清掉（"返还cd"——可以再次安放；蓝不返还）。
+        /// <summary>炸弹被拆除：倒数中断（2026-11-09：安放是限定技，拆弹不再返还次数；蓝不返还）。
         /// 触发渠道：警察封印了安放中的恐怖分子 / police station 沉默了安放者。</summary>
         void DefuseBomb(Card bomb, string how)
         {
@@ -1307,8 +1290,7 @@ namespace SandKill.Core
             bomb.BombActive = false;
             bomb.BombPlanter = -1;
             bomb.BombDueTurn = -1;
-            bomb.UsedSkillTurn = -1;   // 返还cd：本回合可再次安放
-            Log("【恐怖分子】的炸弹被拆除了（" + how + "）：倒数中断，安放技能冷却返还（蓝不返还）。");
+            Log("【恐怖分子】的炸弹被拆除了（" + how + "）：倒数中断，安放次数不返还（限定技；蓝不返还）。");
         }
 
         /// <summary>seat 名下是否有倒数中的炸弹（UI 状态栏显示用）。</summary>
@@ -1461,7 +1443,7 @@ namespace SandKill.Core
             c.SealedBy = takerSeat;   // 2026-10-19：记扣押者（美人计魅惑只归还主目标的人质）
             if (!_silencedCardsByOwner.TryGetValue(targetSeat, out var l)) { l = new List<Card>(); _silencedCardsByOwner[targetSeat] = l; }
             l.Add(c);
-            _hostages.Add(new Hostage { Card = c, OwnerSeat = targetSeat, ReleaseTurn = t.OwnTurnCount + 2 });
+            _hostages.Add(new Hostage { Card = c, OwnerSeat = targetSeat, KeeperSeat = takerSeat, ReleaseTurn = t.OwnTurnCount + 2 });
             if (OnIntel != null) OnIntel(takerSeat, targetSeat, c.Type);   // 扣押命中的牌型公开播报（与警察一致）
             Log(Players[takerSeat].Name + " 的【典狱长】扣押了 " + t.Name + " 的【" + c.Type.Name() + "】作为人质（封印）："
                 + t.Name + " 的第2个回合结束归还并解除封印（人质扣2回合）。");
@@ -1646,19 +1628,12 @@ namespace SandKill.Core
                           ?? shields.FirstOrDefault(c => c.Type == CardType.Valkyrie)
                           ?? priests.FirstOrDefault();
                 }
-                if (shield != null) { DiscardGuard(v, shield, pc.AttackerSeat, pc.AttackKind); TryFireFocusBonus(pc.AttackerSeat); ResumeBlast(); return; }
+                if (shield != null) { DiscardGuard(v, shield, pc.AttackerSeat, pc.AttackKind); TryFireFocusBonus(pc.AttackerSeat); return; }
             }
             Log(v.Name + " 选择保留挡刀牌，不挡刀。");
             ResolveDrawn(pc.AttackerSeat, pc.Seat, pc.DrawnCard, pc.AttackKind);
             EndTurnIfCurrentDead();
             TryFireFocusBonus(pc.AttackerSeat);
-            ResumeBlast();
-        }
-
-        /// <summary>炸弹冲击波断点续炸：提交点清掉 Pending 后，若爆炸队列还没炸完则继续。</summary>
-        void ResumeBlast()
-        {
-            if (_blastQueue.Count > 0 && Pending == null && !GameOver) ContinueBlast();
         }
 
         public void SubmitDiscardPick(int cardId)
@@ -1672,14 +1647,13 @@ namespace SandKill.Core
             CompleteDiscardPick(Players[pc.Seat], card, _pendingElim != null ? _pendingElim.Seat : -1);
             if (_pendingElim != null) { var pe = _pendingElim; _pendingElim = null; FinishElimination(pe); }
             EndTurnIfCurrentDead();
-            ResumeBlast();
         }
 
         public void SubmitDeathrattleTarget(int targetSeat)
         {
             var pc = Pending;
             if (pc == null || pc.Kind != ChoiceKind.DeathrattleAttack) return;
-            if (!Players[pc.Seat].Alive) { Pending = null; ResumeBlast(); return; }
+            if (!Players[pc.Seat].Alive) { Pending = null; return; }
             if (targetSeat < 0 || targetSeat >= Players.Count || targetSeat == pc.Seat
                 || !Players[targetSeat].Alive || Players[targetSeat].Hand.Count == 0
                 || IsProtected(pc.Seat, targetSeat)) return;
@@ -1688,7 +1662,6 @@ namespace SandKill.Core
             Log(Players[pc.Seat].Name + " 的亡语攻击打向 " + Players[targetSeat].Name + "！");
             ResolveAttack(pc.Seat, targetSeat, ActionKind.Attack);
             EndTurnIfCurrentDead();
-            ResumeBlast();
         }
 
         // ------------------------------------------------------------------
@@ -1766,12 +1739,15 @@ namespace SandKill.Core
         }
 
         /// <summary>方案C护盾（2026-10-13 用户设计）：尝试吸收1次对玩家的伤害。有充能时吸收成功（扣1充能）并播报。
-        /// 吸收范围：任何攻击实例（普攻/毒药/军火库/强攻追加/炸弹随机攻击——在抽牌前整个吞掉，同时保护本体HP与整个手牌），
-        /// 以及勒索【英雄】的1点直伤。到期/吸满即消散（Charges=0）。</summary>
-        bool TryAbsorbShield(int victimSeat, string sourceDesc, int sourceSeat = -1)
+        /// 吸收范围：任何攻击实例（普攻/毒药/军火库/强攻追加——在抽牌前整个吞掉，同时保护本体HP与整个手牌）、
+        /// 勒索【英雄】的1点直伤、炸弹冲击波直伤（noSource：普通护盾吸收，风墙定向护盾不吸收无来源伤害）。
+        /// 到期/吸满即消散（Charges=0）。</summary>
+        bool TryAbsorbShield(int victimSeat, string sourceDesc, int sourceSeat = -1, bool noSource = false)
         {
             var v = Players[victimSeat];
             if (v.ShieldCharges <= 0) return false;
+            // 2026-11-09 无来源伤害（炸弹直伤等）：定向护盾（风墙）找不到"来源玩家"对号入座，不吸收。
+            if (noSource && v.ShieldSourceSeat >= 0) return false;
             // 2026-10-23 风墙定向护盾：只吸收来自指定玩家（ShieldSourceSeat）的伤害；普通护盾 sourceSeat=-1 不定向。
             if (v.ShieldSourceSeat >= 0 && sourceSeat >= 0 && v.ShieldSourceSeat != sourceSeat) return false;
             v.ShieldCharges--;

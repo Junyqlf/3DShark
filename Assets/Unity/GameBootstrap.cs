@@ -66,6 +66,12 @@ namespace SandKill.Unity
                 go.AddComponent<GameBootstrap3>().Init(this, RandomSeed);
                 return;
             }
+            if (mode == 3)
+            {
+                var go = new GameObject("Game25DSession");
+                go.AddComponent<GameBootstrap25D>().Init(this, RandomSeed);
+                return;
+            }
             NewGame();
         }
 

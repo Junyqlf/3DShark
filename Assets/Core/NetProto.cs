@@ -75,6 +75,7 @@ namespace SandKill.Core
                 "SH=" + c.SynthHP, "RV=" + (c.ReviveUsed ? 1 : 0), "PR=" + (c.PrayerUsed ? 1 : 0),
                 "PD=" + c.PrayerDueTurn,
                 "B=" + (c.BombActive ? 1 : 0), "BP=" + c.BombPlanter, "BD=" + c.BombDueTurn,
+                "TPU=" + (c.TerrorPlantUsed ? 1 : 0),
                 "SS=" + c.SeizeStamp, "SB=" + c.SealedBy
             };
             return string.Join(";", parts.ToArray());
@@ -109,6 +110,7 @@ namespace SandKill.Core
                 c.BombActive = map["B"] == "1";
                 c.BombPlanter = int.Parse(map["BP"]);
                 c.BombDueTurn = int.Parse(map["BD"]);
+                c.TerrorPlantUsed = map.TryGetValue("TPU", out var tpu) && tpu == "1";   // 2026-11-09 限定技；旧串缺字段按未用
                 c.SeizeStamp = int.Parse(map["SS"]);
                 c.SealedBy = int.Parse(map["SB"]);
                 return c;
@@ -128,7 +130,8 @@ namespace SandKill.Core
                 && a.ReviveUsed == b.ReviveUsed && a.PrayerUsed == b.PrayerUsed
                 && a.PrayerDueTurn == b.PrayerDueTurn
                 && a.BombActive == b.BombActive && a.BombPlanter == b.BombPlanter
-                && a.BombDueTurn == b.BombDueTurn && a.SeizeStamp == b.SeizeStamp
+                && a.BombDueTurn == b.BombDueTurn && a.TerrorPlantUsed == b.TerrorPlantUsed
+                && a.SeizeStamp == b.SeizeStamp
                 && a.SealedBy == b.SealedBy;
         }
     }

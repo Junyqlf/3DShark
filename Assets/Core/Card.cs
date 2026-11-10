@@ -55,11 +55,13 @@ namespace SandKill.Core
         // ---- 恐怖分子（2代 2026-10-13 改版）：主动【安放炸弹】----
         /// <summary>炸弹是否已安放并倒数中。</summary>
         public bool BombActive;
-        /// <summary>安放者座位。触发器绑定在玩家身上（到安放者的回合检查恐怖分子还活不活）；
-        /// 恐怖分子被大臣拿去贿赂送人也不改目标——爆炸仍以安放者的敌我划线。</summary>
+        /// <summary>安放者座位。触发器绑定在玩家身上（到安放者的回合检查恐怖分子还活不活）——只绑定"何时炸"，
+        /// 不绑定"炸谁"：2026-11-09 起爆炸以炸弹现任持有者的敌我划线（炸弹跟着牌走）。</summary>
         public int BombPlanter = -1;
         /// <summary>爆炸回合：安放者 OwnTurnCount ≥ 此值时结算（安放时 = OwnTurnCount + 2）。</summary>
         public int BombDueTurn = -1;
+        /// <summary>安放炸弹是否已用（2026-11-09 用户裁定：限定技——每张恐怖分子整局限安放1次；拆弹不返还）。</summary>
+        public bool TerrorPlantUsed;
 
         /// <summary>典狱长专用：上次扣押时的 OwnTurnCount（2回合冷却：OwnTurnCount - SeizeStamp ≥ 2 才可再扣押；-1=从未扣押）。</summary>
         public int SeizeStamp = -1;
@@ -77,6 +79,7 @@ namespace SandKill.Core
             // 限定技布尔家族
             PoisonUsed = AntidoteUsed = ExtortUsed = false;
             ReviveUsed = PrayerUsed = false;
+            TerrorPlantUsed = false;   // 炸弹安放限定技同族：下一条命从零开始
 
             // 定时器家族
             AppleTimer = -1;

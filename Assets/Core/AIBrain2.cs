@@ -59,6 +59,11 @@ namespace SandKill.Core
                                                // 保血版：英雄牌永远挡（挡1HP就是赚），医师满血例外不挡；其余牌挡刀阈值 8→5 放宽。
                                                // 2026-10-09 用户裁定例外：风格2 不挡亡灵（被抽中自动免疫，挡它纯浪费）与牧师（被抽中触亡语回收，挡它剥夺自己回收）；
                                                // 全风格把带刀侍卫/军机大臣按≥8分档挡（KeepValue=7 不动全局表，挡刀价值另算，见 ChooseGuardIntercept）。
+        // 中级挡刀决策树（2026-11-03 用户："defend作为行为，关系最大的两个节点都是内部的——自身defend属性 × 被攻击牌价值；外部=攻击来源审计先搁置"）
+        // 二叉树=最简神经网络：根=defend丰度分流，叶前=被攻击牌动态价值(TypeValue)阈值，叶子=挡/不挡。仅中级(Difficulty≥2)走树，初级走 BlockStyle 现行逻辑。
+        public float BlockTreeDefendAbundant = 3f;  // 根节点：HandDefendUnits ≥ 此值 = 防御充裕档（身体多→放宽挡刀）
+        public float BlockTreeValueMid = 5f;        // 充裕档：被攻击牌价值 ≥ 此值才挡
+        public float BlockTreeValueHigh = 8f;       // 稀缺档：被攻击牌价值 ≥ 此值才挡（现行教学版阈值8的自然延续）
         public bool AfkUntilDuel = false;      // 挂机策略（2026-10-09 用户设计）：非1v1回合一律空过（不普攻不用技），进1v1后恢复正常；挡刀等反应性决策仍生效
         public int PressureStyle = 0;          // 对赌施压（2026-10-12 用户设计，只换攻击索敌，其余沿用雨露均沾）：0=雨露均沾（默认）1=双边账本索敌
                                                // 模型：每条双边交互是独立账本，gap=我打他的次数-他打我的次数（普攻/军火库/毒药都算投入）。
@@ -171,16 +176,24 @@ namespace SandKill.Core
             return b;
         }
 
-        public AIBrain2(int seed, int seat, int playerCount) : this(seed, seat, playerCount, null, null) { }
+        /// <summary>难度档（2026-10-29 用户裁定锁定现行AI）：1=初级=现行全部行为（默认，全部既有对局/测试不变）；
+        /// ≥2=中级——新算法（成长分估值等）只在此档生效。</summary>
+        public readonly int Difficulty;
 
-        public AIBrain2(int seed, int seat, int playerCount, AIWeights weights) : this(seed, seat, playerCount, weights, null) { }
+        public AIBrain2(int seed, int seat, int playerCount) : this(seed, seat, playerCount, null, null, 1) { }
+
+        public AIBrain2(int seed, int seat, int playerCount, AIWeights weights) : this(seed, seat, playerCount, weights, null, 1) { }
 
         public AIBrain2(int seed, int seat, int playerCount, AIWeights weights, AIModules modules)
+            : this(seed, seat, playerCount, weights, modules, 1) { }
+
+        public AIBrain2(int seed, int seat, int playerCount, AIWeights weights, AIModules modules, int difficulty)
         {
             _rng = new Random(seed);
             _seat = seat;
             _w = weights ?? new AIWeights();
             _mod = modules ?? AIModules.AllOn;
+            Difficulty = difficulty;
             _grudge = new float[playerCount];
             _arsenalSeen = new bool[playerCount];
             _recentAttacksOn = new int[playerCount];
@@ -387,11 +400,12 @@ namespace SandKill.Core
                                               || c.Type == CardType.ArmedGuard || c.Type == CardType.Warden) >= _w.ArmGuardMinBodies)
                 cart.Add(new CartItem(arm, atkEv * 1.5f, 0));
 
-            // 2.5 恐怖分子炸弹（2026-10-13 改版）：EV=敌方存活英雄数×每点伤害价值（全场AOE）。
-            // 爆弹会送掉恐怖分子本体（≈3价值档），1v1时净收益偏薄，至少2个敌人才安放。
+            // 2.5 恐怖分子炸弹（2026-11-09 直伤版）：EV=敌方存活英雄数×每点直伤价值（全场AOE直伤，
+            // 无视挡刀/2生命身体/亡灵免疫，只有护盾能挡）。爆弹会送掉恐怖分子本体（≈3价值档），1v1时净收益偏薄，至少2个敌人才安放。
+            // 安放是限定技（拆弹不返还），AI 仍只看 EV——限定性由"这回合不用就浪费一个限定技机会"自然进入比较。
             var bomb = legal.FirstOrDefault(a => a.Kind == ActionKind.BombPlant);
             if (bomb != null && aliveOpponents >= 2)
-                cart.Add(new CartItem(bomb, atkEv * 1.2f, 0));
+                cart.Add(new CartItem(bomb, atkEv * 1.5f, 0));   // 1.2→1.5：直伤版无视一切肉身防线，方差大降、均值上调
 
             // 3. 扣押：先封后打——顺序加成让它排在普攻前，但 EV modest（0.8×普攻）不占收益预算
             var sez = legal.Where(a => a.Kind == ActionKind.Seize).ToList();
@@ -541,19 +555,20 @@ namespace SandKill.Core
                     if (a.TargetType == CardType.Inquisitor && me.HeroId == 5) continue;   // 猎巫行动英雄：审判官冗余
                     var cost = g.CraftCost(seat, a.TargetType, a.SourceCardId);   // "任意"位按合法行动指定的牌估价（便宜的第三张EV更高，自然入选）
                     if (cost == null) continue;
-                    // 2026-10-23 用户裁定：合成奖励（方案C护盾）只保留给典狱长（唯一3合1）；其余合成牌降格2合1后无奖励。
+                    // 合成奖励按座位方案计：0=抽1张牌（全库均值）/ 2=方案C护盾。
                     // 护盾EV=合成后手牌均值（2026-10-14 用户口径）：护盾吞掉的那次攻击本该抽走自己手牌随机一张，
                     // 保护对象=自己手牌（含英雄——英雄被抽中=1伤害，按全库均值平价计入；不设折扣倍率：
                     // 窗口内94%触发已实证，且无消耗/无暴露/不可被针对，仿军火库的0.75在这里没有机制基础）。
-                    float rewardEv = 0f;
-                    if (a.TargetType == CardType.Jailer && g.CraftRewardStyle[seat] == 2)
+                    float rewardEv;
+                    if (g.CraftRewardStyle[seat] == 2)
                     {
                         float postSum = me.Hand.Sum(x => (float)(x.Type == CardType.Hero ? DeckMean : KeepValue(x.Type)))
                                       - cost.Sum(c => (float)KeepValue(c.Type))
                                       + KeepValue(a.TargetType);
-                        float postCount = me.Hand.Count - cost.Count + 1;   // -配方 +1合成牌
+                        float postCount = me.Hand.Count - cost.Count + 1;   // -3配方 +1合成牌
                         rewardEv = postSum / postCount;
                     }
+                    else rewardEv = DeckMean;
                     float ev = KeepValue(a.TargetType) + rewardEv - cost.Sum(c => (float)OwnCardValue(c, me));
                     if (a.TargetType == CardType.Inquisitor)
                         ev += ExpectedInEnemyHands(g, me, CardType.Witch) + ExpectedInEnemyHands(g, me, CardType.Undead);   // 外面每个女巫/亡灵各+1分（2026-10-13 用户：审判官2HP身体强化捉鬼任务）
@@ -562,8 +577,17 @@ namespace SandKill.Core
                 }
             }
 
-            // 10.6 合成牌技能：典狱长扣押 / 审判官审判（女祭司双限定技已于 2026-10-23 移除——
-            // 继承的女巫双药走通用毒药/解药分支自动入车，无需专项）
+            // 10.6 合成牌技能：女祭司双限定技 / 典狱长扣押 / 审判官审判
+            var srv = legal.FirstOrDefault(a => a.Kind == ActionKind.SynthRevive);
+            if (srv != null)
+            {
+                int bestVal = g.Discard.Where(c => c.Type.IsRole() && c.Type != CardType.Hero)
+                                       .Select(c => KeepValue(c.Type)).DefaultIfEmpty(0).Max();
+                if (bestVal >= 5) cart.Add(new CartItem(srv, bestVal - 1f, 0));   // 限定技：只捞高价值
+            }
+            var sp = legal.FirstOrDefault(a => a.Kind == ActionKind.SynthPrayer);
+            if (sp != null && me.HP < me.MaxHP)
+                cart.Add(new CartItem(sp, 1.5f, 0));   // 延迟2回合的回血，满血不放
             var hos = legal.Where(a => a.Kind == ActionKind.SynthHostage).ToList();
             if (hos.Count > 0 && (!_mod.ResourceDiscipline || me.MP >= GameEngine2.COST_BASIC_ATTACK + GameEngine2.COST_SYNTH_SKILL))
                 cart.Add(new CartItem(PickAttackTarget(hos, g, me), atkEv * 0.7f, 0));   // 人质=偷1张牌+封印1回合
@@ -571,21 +595,16 @@ namespace SandKill.Core
             if (jud.Count > 0)
                 cart.Add(new CartItem(PickAttackTarget(jud, g, me), atkEv * 0.8f, 0));   // 审判≈驱魔的下位替代（只处决异端）
 
-            // 10.7 3代·法术迸发（2026-10-21 用户裁定；2026-10-22 中午炼金术重做并入）：learn 与施法入车。
+            // 10.7 3代·法术迸发（2026-10-21 用户裁定；2026-10-23 平衡包后法术集=点燃/雷霆/彗星/风墙/冰川/治疗术）：
             // learn：只学手里持有的法术（抽不到的学了也放不出），EV=该法术释放收益−1（learn 本身耗1行动点）；
-            // 施法收益（用户口径）：屏障固定5；清晰术固定6；
-            // 雷霆按"能对目标造成的伤害点数"查表：1点=1分、2点=6分、3点=11分（每多1点+5分）；
-            // 点燃=目标手里有军火库8分、否则2分；
-            // 炼金术（2026-10-22 中午重做=通用法术）：合法行动 TargetType=被模仿的已研习法术，
-            // 直接命中下面各 case 按真法术计价——直接释放无延期折扣（"贵的东西缺点只有贵"）。
+            // 施法收益（用户口径，10-23 更新）：点燃=无军火库5分/有军火库6分（压方差加强常态）；雷霆按伤害点数查表；
+            // 风墙（定向2点护盾）5分；冰川（冻目标2回合刷新）6分；治疗术（回1HP）5分；彗星=被动反制不可主动释放。
             var g3 = g as GameEngine3;
             if (g3 != null)
             {
                 foreach (var a in legal.Where(x => x.Kind == ActionKind.Learn))
                 {
                     if (!me.Hand.Any(c => c.Type == a.TargetType)) continue;   // 手里没这张法术牌，学了也白学
-                    // 2026-10-23：治疗术只在血量不健康时才学（用户裁定"偏后期瞬发回复"）
-                    if (a.TargetType == CardType.Heal && me.HP >= me.MaxHP) continue;
                     float learnEv = SpellLearnEv(a.TargetType) - GameEngine3.COST_LEARN;
                     if (learnEv > 0) cart.Add(new CartItem(a, learnEv, 0));
                 }
@@ -625,42 +644,39 @@ namespace SandKill.Core
             return cart.OrderByDescending(c => c.Ev + c.Boost).First().Act;
         }
 
-        /// <summary>3代法术的研习价值基准（2026-10-21 用户口径，与 SpellCastEv 同源；learn 入车时再扣1行动点成本）。
-        /// 2026-10-23 大包：炼金术/清晰术退环境移除；新增冰川/治疗术=5（可调）。</summary>
+        /// <summary>3代法术的研习价值基准（10-23 平衡包后法术集重填；learn 入车时再扣1行动点成本）。值可调。</summary>
         static float SpellLearnEv(CardType t)
         {
             switch (t)
             {
                 case CardType.Ignite: return 6f;
                 case CardType.Thunder: return 6f;
-                case CardType.Barrier: return 5f;   // 风墙（定向2点护盾）
-                case CardType.Glacier: return 5f;   // 2026-10-23 新增：节奏压制（可调）
-                case CardType.Heal: return 5f;      // 2026-10-23 新增：瞬发回血（learn 另有满血门禁，可调）
-                case CardType.Comet: return 5f;   // 2026-10-21 用户裁定：彗星也是法术牌，反制需研习——给反制潜力一个中位基准价（可调）
-                default: return 0f;
+                case CardType.Barrier: return 5f;    // 风墙
+                case CardType.Glacier: return 5f;    // 冰川
+                case CardType.Heal: return 5f;       // 治疗术
+                case CardType.Comet: return 5f;      // 反制潜力中位价（用户裁定，可调）
+                default: return 0f;   // 炼金术/清晰术已退环境，不会出现在法术集
             }
         }
 
-        /// <summary>3代法术施法 EV（2026-10-21 用户口径；2026-10-23 大包修订）：
-        /// 风墙（定向2点护盾）固定5；治疗术=满血0/不满5（learn 已门禁，这里是双保险）；
+        /// <summary>3代法术施法 EV（10-23 用户口径："点燃评分改为无库5分/有库6分，压方差、加强常态"）：
         /// 雷霆按"能对目标造成的伤害点数"查表：1点=1分、2点=6分、3点=11分（每多1点+5分）；
-        /// 点燃（2026-10-23 用户口径）：目标手牌里有军火库=6分，否则5分（加强常态、削弱针对）；
-        /// 冰川（2026-10-23 新增）固定5：冻结目标2回合的行动点/回合技刷新（可调）。</summary>
+        /// 风墙=定向2点护盾5分；冰川=冻结目标2回合行动点/回合技刷新6分；治疗术=回1英雄HP5分；
+        /// 彗星=被动反制，不可主动释放（0）。值均可调。</summary>
         static float SpellCastEv(GameEngine3 g3, GameAction a)
         {
             switch (a.TargetType)
             {
-                case CardType.Barrier: return 5f;
-                case CardType.Heal:
-                    return g3.Players[g3.Current].HP < g3.Players[g3.Current].MaxHP ? 5f : 0f;
                 case CardType.Ignite:
-                    return g3.Players[a.TargetSeat].Hand.Any(c => c.Type == CardType.Arsenal) ? 6f : 5f;
-                case CardType.Glacier: return 5f;
+                    return g3.Players[a.TargetSeat].Hand.Any(c => c.Type == CardType.Arsenal) ? 6f : 5f;   // 10-23 用户口径
                 case CardType.Thunder:
                     {
                         int times = (int)Math.Round(g3.Players[a.TargetSeat].Hand.Count * 0.25, MidpointRounding.AwayFromZero);
                         return times <= 0 ? 0f : 5f * times - 4f;
                     }
+                case CardType.Barrier: return 5f;   // 风墙
+                case CardType.Glacier: return 6f;   // 冰川
+                case CardType.Heal: return 5f;      // 治疗术
                 default: return 0f;
             }
         }
@@ -727,9 +743,10 @@ namespace SandKill.Core
                 int left = (c.PoisonUsed ? 0 : 1) + (c.AntidoteUsed ? 0 : 1);
                 return left == 2 ? 8 : left == 1 ? 5 : 2;   // 双药8 / 单药5 / 药尽2（随 KeepValue 女巫档同步）
             }
-            // 2026-10-13 用户 combo 设计：倒数中的恐怖分子对我方价值≈0——炸弹以安放者敌我划线，
-            // 爆炸时本体从任何位置被移除（同归于尽），必死之牌不值得挡/回收/可惜；贿赂送人=纯赚停战。
-            if (c.Type == CardType.Terrorist && c.BombActive) return 0;
+            // 2026-11-09 用户改版"炸弹跟牌走"：倒数中的恐怖分子绝不给出——送给敌人=爆炸改以对方敌我划线，
+            // 可能直击我方英雄（"先挂弹再送人"已变成自杀操作）；留在自己手里则爆炸帮自己打所有敌人。
+            // 给 7 档（≈带刀侍卫/军机大臣档）：高于一切常规给出物，确保贿赂/勒索/合成消耗都不碰它。
+            if (c.Type == CardType.Terrorist && c.BombActive) return 7;
             return KeepValue(c.Type);
         }
 
@@ -772,6 +789,8 @@ namespace SandKill.Core
             // 侍卫/牧师身体只保"手里最后一张法术牌"（那是研习与释放的本钱）；多余的法术被抽中等于帮你腾格子。
             if (GameEngine3.IsSpellType(drawn.Type))
                 return me.Hand.Count(c => GameEngine3.IsSpellType(c.Type)) <= 1;
+            // 2026-11-03 用户设计：中级挡刀走二叉决策树（内部双节点：defend属性 × 被攻击牌价值；外部=攻击来源审计搁置）。
+            if (Difficulty >= 2) return GuardTreeDecide(g, me, drawn);
             int style = _w.BlockStyle;
             if (style == 2 || !_mod.GuardDiscipline)
             {
@@ -813,6 +832,66 @@ namespace SandKill.Core
             return ValueOf(drawn) >= 8;   // 军火库(9) / 双药女巫(8) / 合成牌双技女祭司(8)
         }
 
+        // ------------------------------------------------------------------
+        // 中级挡刀决策树（2026-11-03 用户设计）：defend 行为关系最大的两个节点都是内部的——
+        //   ①自身的 defend 属性（HandDefendUnits：挡刀身体库存+解药回收位）
+        //   ②被攻击牌的（动态）价值（TypeValue：随持有者状态/时局变化）
+        // 外部节点=攻击来源审计（谁打的我）——用户评估"似乎不重要"，先搁置。
+        // 二叉树=最简神经网络：内部节点=单特征一元阈值的感知机，叶子=决策。
+        //   [defend ≥ BlockTreeDefendAbundant ?]
+        //     是→ [value ≥ BlockTreeValueMid ?]  挡 : 不挡     ← 防御充裕：放宽到中价值
+        //     否→ [value ≥ BlockTreeValueHigh ?] 挡 : 不挡     ← 防御稀缺：只保高价值
+        // 预过滤=引擎事实（非判断题，与初级共用）：亡灵被抽中自动免疫回手（挡=纯浪费身体）；
+        // 满血2HP合成牌被抽中只扣1生命还回手（挡=净亏）；牧师被抽中进弃牌堆触发亡语回收1张角色牌
+        // （挡=同时失去回收与身体，10-09用户裁定的风格2例外在此升级为双难度事实）；英雄轴=HP轴（与牌价值正交）：
+        // 医师满血不挡（挨刀启动回血引擎），其余残血才挡——10-09教学版裁定延续。
+        // 初级(BlockStyle)的"带刀侍卫/军机大臣≥8分档"特判不进树：中级用 TypeValue 上下文价值——
+        // 光环配齐的带刀侍卫自然≥5被挡，独守空房的(1分)不挡，正是"思考对象=属性"的落点。
+        // ------------------------------------------------------------------
+        class GuardTreeNode
+        {
+            public bool IsLeaf;
+            public bool Decision;            // 叶子=是否挡刀
+            public bool FeatureIsDefend;     // 内部节点：true=defend丰度 / false=被攻击牌价值
+            public float Threshold;
+            public GuardTreeNode Yes, No;    // 满足阈值 / 不满足
+        }
+        GuardTreeNode _guardTree;            // 懒构建（阈值快照自 _w，每个brain实例独立）
+
+        GuardTreeNode BuildGuardTree()
+        {
+            var block = new GuardTreeNode { IsLeaf = true, Decision = true };
+            var eat = new GuardTreeNode { IsLeaf = true, Decision = false };
+            return new GuardTreeNode
+            {
+                FeatureIsDefend = true, Threshold = _w.BlockTreeDefendAbundant,
+                Yes = new GuardTreeNode { FeatureIsDefend = false, Threshold = _w.BlockTreeValueMid, Yes = block, No = eat },
+                No = new GuardTreeNode { FeatureIsDefend = false, Threshold = _w.BlockTreeValueHigh, Yes = block, No = eat },
+            };
+        }
+
+        bool GuardTreeDecide(GameEngine2 g, PlayerState me, Card drawn)
+        {
+            if (drawn.Type == CardType.Undead) return false;    // 引擎事实：自动免疫回手
+            if (drawn.SynthHP >= 2) return false;               // 引擎事实：满血2HP只扣1生命还回手
+            if (drawn.Type == CardType.Priest) return false;    // 引擎事实：亡语回收替换，挡=双亏
+            if (drawn.Type == CardType.Hero)
+            {
+                if (g.HeroOf(me.Seat).Id == 0 && me.HP >= me.MaxHP) return false;
+                return me.HP < me.MaxHP;
+            }
+            if (_guardTree == null) _guardTree = BuildGuardTree();
+            int defend = HandDefendUnits(me.Hand, g.HeroOf(me.Seat).PriestSacrifice);
+            float value = TypeValue(g, me, drawn.Type);
+            var node = _guardTree;
+            while (!node.IsLeaf)
+            {
+                float x = node.FeatureIsDefend ? defend : value;
+                node = x >= node.Threshold ? node.Yes : node.No;
+            }
+            return node.Decision;
+        }
+
         /// <summary>解药/牧师亡语的回收目标（2026-10-04 测试任务2，ReviveStyle 旋钮）：
         /// 1=最高KeepValue（默认）2=优先驱魔师 3=优先警察 4=优先亡灵 5=优先侍卫 6=优先守卫 7=优先青苹果；优先目标不在场则回退最高价值。
         /// 2026-10-08 用户裁定：风格5 不全局开（会把医师 41→29、猎巫 33→25），改为牺牲英雄（HeroRoster Id=6）在默认风格1 下自动套用风格5（+14.6pp，远超噪声）；显式设置其他风格（2~7）时尊重旋钮，保证 StatSupport 可 A/B。</summary>
@@ -822,7 +901,6 @@ namespace SandKill.Core
             // 点掉价值最高的一张（军火库9/女祭司10自然成为首选），不走回收风格（牺牲英雄的"优先侍卫"不该污染点燃）。
             if (g is GameEngine3 && options.Count > 0 && g.Players.Any(p => p.Hand.Contains(options[0])))
                 return options.OrderByDescending(c => KeepValue(c.Type)).First().Id;
-            // （3代·炼金术"从牌库回收"版的选择分支已随 2026-10-22 中午"直接释放"重做整体移除——炼金术不再产生 Options）
             int style = _w.ReviveStyle;
             if (style == 1 && g.HeroOf(seat).Id == 6) style = 5;   // 牺牲英雄专属：优先复活侍卫（挡刀肉身回归）
             CardType? fav = null;
@@ -960,7 +1038,7 @@ namespace SandKill.Core
             float known = 0;
             int knownN = 0;
             if (_intel.TryGetValue(p.Seat, out var info))
-                foreach (var kv in info) { known += KeepValue(kv.Key) * kv.Value; knownN += kv.Value; }
+                foreach (var kv in info) { known += TypeValue(g, p, kv.Key) * kv.Value; knownN += kv.Value; }   // 2026-10-29：中级走成长分（警察轴按持有者p手牌），初级=KeepValue 不变
             knownN = Math.Min(knownN, total);
             return known + (total - knownN) * DeckMean;
         }
@@ -999,7 +1077,7 @@ namespace SandKill.Core
 
         /// <summary>贿赂 EV（2026-10-14③ 用户重设计，④加总系数）：无威胁项、无前置条件。
         /// EV = 给出后剩余手牌（非英雄）的价值均值 × BribeEvCoeff——贿赂=自选哪张牌"被打"，丢垃圾抬均值、给好牌=资助敌人均值自降；
-        /// 安放完炸弹的恐怖分子按 0 分计（爆炸以安放者敌我划线、敌人最终什么都得不到）。
+        /// 安放完炸弹的恐怖分子按 7 分计（2026-11-09"炸弹跟牌走"：送人=可能炸回自己，绝不出手；见 ValueOf）。
         /// 军机大臣"先给出去反手勒索回来"的天然 combo 不入公式（发生即大赚，由局势自然产生）。
         /// ④：系数必需——纯均值与普攻EV（≈全库均值4.1）同档，实测每局530次贿赂、全场停战对局瘫痪（20000步打不完）、
         /// 美人计狂用侍女贿赂的局胜率反而 25.7% vs 不用 37.5%（停战=谁也杀不掉谁）。0.5=停战+自选牌≈半张牌的价值。
@@ -1015,6 +1093,9 @@ namespace SandKill.Core
             float ValueOf(Card c)
             {
                 if ((c.Type == CardType.Terrorist && c.BombActive) || g.IsHostage(c)) return 0f;
+                // 2026-10-22 用户裁定：被点燃的牌=0分 fodder——到点必烧毁（转移即落空），拿去贿赂换停战；
+                // 顺序在材料价之前：被点燃的法术牌也是0分，不是研习材料。
+                if (g is GameEngine3 && ((GameEngine3)g).IgniteRemaining(c) >= 0) return 0f;
                 // 2026-10-21 用户裁定：手里法术≤2张时是研习材料不是垃圾（2技能点要吃2张牌本体）——
                 // 给出代价按材料价4计，AI贿赂时会优先留下法术；≥3张充足时法术就是1分 fodder（用户确认）。
                 if (g is GameEngine3 && GameEngine3.IsSpellType(c.Type)
@@ -1042,7 +1123,116 @@ namespace SandKill.Core
             return me.Hand.Count >= maxOpp;
         }
 
-        /// <summary>牌的预期收益档位（喂牌/藏牌/勒索决策用，数值=价值档，非线性）。2026-10-02 按用户要求重调：大臣下调、侍卫/牧师上调、驱魔/警察/守卫/女巫下调。</summary>
+        // ==================================================================
+        // 2026-10-29 中级估值：成长分 + 手牌质量挂属性（ai优化思路.docx：分数挂状态属性而非只挂行动）
+        // ==================================================================
+
+        /// <summary>成长轴A（2026-10-29 用户设计）：全场手牌萎缩度 0(开局满手)~1(残局空手)。亡灵专用。
+        /// = 1 − 存活玩家非英雄手牌均值/开局10张，clamp[0,1]。全公开信息（手牌张数公开），不偷看。</summary>
+        public static float GrowthT(GameEngine2 g)
+        {
+            var alive = g.Players.Where(p => p.Alive).ToList();
+            if (alive.Count == 0) return 0f;
+            double avg = alive.Average(p => p.Hand.Count(c => c.Type != CardType.Hero));
+            return (float)Math.Max(0.0, Math.Min(1.0, 1.0 - avg / 10.0));
+        }
+
+        /// <summary>牌型动态价值（中级核心入口，2026-10-29② 每牌独立成长轴——确定性数据原则：漏风的估值一律换确定数据）：
+        /// 难度≥2 → 三张成长牌各自按确定性轴取值；否则 = KeepValue（初级恒定现行打分，一行不改）。
+        /// 新估值算法统一从这里进，别再散着写 KeepValue 特例。owner=牌的持有者（警察轴依赖持有者手牌，估值随持有者状态变化）。</summary>
+        public float TypeValue(GameEngine2 g, PlayerState owner, CardType t)
+        {
+            if (Difficulty >= 2)
+            {
+                switch (t)
+                {
+                    case CardType.Undead:
+                        // 轴=手牌萎缩度（前期3→残局5）：手牌越薄每刀越容易抽到它，免疫越值钱
+                        return 3f + 2f * GrowthT(g);
+                    case CardType.Priest:
+                        // 轴=弃牌堆数量（用户10-29②：质量不可判定→用数量）：0张=1分，每多3张+1分，上限7分
+                        return Math.Min(7f, 1f + g.Discard.Count / 3);
+                    case CardType.Police:
+                    case CardType.Exorcist:
+                        // 轴=主动技名额阶梯（用户10-29④：守卫/驱魔人同警察轴——漏风判断换确定性数据）：
+                        // 剩1张=base+1（升值）、2张=base（原值）、3张=base−1（开始贬值）、>3张=base−2（有工人+1）。
+                        // 警察 base=4（1→5/2→4/3→3/>3 工人?3:2【无工人档为推测值待确认】）；驱魔人同阶梯 base=4。
+                        return ActiveSlotLadder(g, owner, 4);
+                    case CardType.Guard:
+                        // 同主动技名额阶梯，base=3=KeepValue原值（用户10-29④：2张保持原值/3张贬值/1张升值）：
+                        // 1→4、2→3、3→2、>3 工人?2:1
+                        return ActiveSlotLadder(g, owner, 3);
+                    case CardType.ArmedGuard:
+                        // 光环对象在手加分（用户10-29④）：本体基础1分 + 手牌有侍卫+3（可主动触发挡刀，最高档）
+                        // + 手牌有大臣+2 + 手牌有守卫+2（后两种为被动触发）。引擎光环名单=侍卫/大臣/带刀侍卫/守卫，
+                        // 用户口径取除自身外3种伙伴牌。独自在手≈1分，配齐≈8分。
+                        {
+                            float v = 1f;
+                            if (owner.Hand.Any(c => c.Type == CardType.Guard)) v += 3f;
+                            if (owner.Hand.Any(c => c.Type == CardType.Minister)) v += 2f;
+                            if (owner.Hand.Any(c => c.Type == CardType.Warden)) v += 2f;
+                            return v;
+                        }
+                }
+            }
+            return KeepValue(t);
+        }
+
+        // ==================================================================
+        // 2026-10-30 属性抽象（用户：改变思考对象——AI 面向手牌级聚合属性而非单张牌）
+        // ==================================================================
+
+        /// <summary>手牌限定技单位数 limit（用户10-30 属性抽象）：
+        /// 女巫按牌状态动态计（双药=2/单药=1/药尽=0）；军机大臣=1；恐怖分子每张=1；
+        /// 大臣=手牌级规则——没法随用，不管几张整场算1。女巫的一药也能喂解药回收挡刀牌（见 HandDefendUnits 联动）。</summary>
+        public static int HandLimitUnits(List<Card> hand)
+        {
+            int n = 0;
+            foreach (var c in hand)
+            {
+                if (c.Type == CardType.Witch)
+                    n += (c.PoisonUsed ? 0 : 1) + (c.AntidoteUsed ? 0 : 1);
+                else if (CardDefs.Of(c.Type).LimitUnits > 0)
+                    n += CardDefs.Of(c.Type).LimitUnits;
+            }
+            if (hand.Any(c => c.Type == CardType.Minister)) n += 1;   // 大臣手牌级封顶1（用户：没法随便用）
+            return n;
+        }
+
+        /// <summary>手牌防御单位数 defend（用户10-30 属性抽象）：
+        /// 挡刀身体逐张计（侍卫/女武神/圣骑士=IsDefendBody；牺牲英雄的牧师经 priestCanBlock 参数另计——英雄条件不进基础抽象）；
+        /// 已有≥1张侍卫时，女巫的解药可瞬发回收阵亡侍卫（挡刀被消耗→解药拉起）=等效+1（用户："也是瞬发效果，等效加在defend上"）。</summary>
+        public static int HandDefendUnits(List<Card> hand, bool priestCanBlock = false)
+        {
+            int bodies = hand.Count(c => CardDefs.Of(c.Type).IsDefendBody);
+            if (priestCanBlock) bodies += hand.Count(c => c.Type == CardType.Priest);
+            bool hasGuard = hand.Any(c => c.Type == CardType.Guard);
+            bool antidoteUp = hand.Any(c => c.Type == CardType.Witch && !c.AntidoteUsed);
+            return bodies + (hasGuard && antidoteUp ? 1 : 0);
+        }
+
+        /// <summary>主动技名额阶梯（用户10-29④）：估值按持有者手牌里"抢主动技名额"的牌数分档——
+        /// n=剩1张→base+1（升值：名额稀缺，这张被动/功能牌更舍不得丢）；
+        /// n=2张→base（原值）；n=3张→base−1（名额紧张开始贬值）；n>3张→base−2（有工人+1：工人供蓝让主动技更可持续）。
+        /// 确定性轴：用自己手牌（敌人隐藏信息×2漏风→用自己手牌判定，同警察轴）。</summary>
+        static float ActiveSlotLadder(GameEngine2 g, PlayerState owner, int baseVal)
+        {
+            int n = owner.Hand.Count(c => CardDefs.Of(c.Type).Ability == AbilityKind.Active);
+            if (n <= 1) return baseVal + 1;
+            if (n == 2) return baseVal;
+            if (n == 3) return baseVal - 1;
+            return owner.Hand.Any(c => c.Type == CardType.Worker) ? baseVal - 1 : baseVal - 2;
+        }
+
+        /// <summary>手牌质量估值（挂属性）：自己手牌逐张 TypeValue 之和（不含英雄）。
+        /// "手牌质量领先"维度的可观测口径——自己手牌是 private 全知，对手手牌用 HandValueEst 估算。</summary>
+        public float HandQuality(GameEngine2 g, PlayerState p)
+        {
+            return p.Hand.Where(c => c.Type != CardType.Hero).Sum(c => TypeValue(g, p, c.Type));
+        }
+
+        /// <summary>牌的预期收益档位（喂牌/藏牌/勒索决策用，数值=价值档，非线性）。2026-10-02 按用户要求重调：大臣下调、侍卫/牧师上调、驱魔/警察/守卫/女巫下调。
+        /// 2026-10-29 起：中级动态估值请走 TypeValue（成长分），本表保持初级的静态档位不变。</summary>
         public static int KeepValue(CardType t)
         {
             switch (t)
@@ -1058,7 +1248,7 @@ namespace SandKill.Core
                 case CardType.Police: return 4;         // 封印关键牌=限制对手，不确定收益
                 case CardType.Undead: return 4;         // 每被抽中1次≈少受1伤害，持续收益
                 case CardType.Guard: return 3;          // 挡刀≈省1牌（2026-10-02 上调：被低估）
-                case CardType.Terrorist: return 3;      // 安放炸弹（2026-10-13 改版）：本体是消耗品（爆炸自灭），价值在技能——给3档肉身价
+                case CardType.Terrorist: return 3;      // 安放炸弹（2026-11-09 直伤版）：本体是消耗品（爆炸自灭），价值在限定技——给3档肉身价
                 case CardType.Priestess: return 10;     // 合成牌：双限定技（复活任意角色 + 延迟回血）。2026-10-13 用户调价 8→10：配方的女巫按用药后动态价(8/5/2)计后，药尽女巫能把 EV 拉正
                 case CardType.Paladin: return 9;        // 合成牌：2点生命挡刀身体 + 耗尽时牧师亡语。2026-10-13 用户调价 6→9（"至少9分"：挡刀身体+亡语+可复活套利）
                 case CardType.Valkyrie: return 6;       // 合成牌：2点生命挡刀身体。2026-10-13 用户调价 5→6
@@ -1086,7 +1276,7 @@ namespace SandKill.Core
                 { CardType.Police, 4 }, { CardType.Guard, 4 }, { CardType.Witch, 3 },
                 { CardType.Arsenal, 1 }, { CardType.ArmedGuard, 1 }, { CardType.Minister, 4 },
                 { CardType.GrandMinister, 1 }, { CardType.Warden, 3 }, { CardType.Maid, 4 },
-                { CardType.Terrorist, 4 }   // 2026-10-23：青苹果退环境（44张标准牌库）
+                { CardType.GreenApple, 3 }, { CardType.Terrorist, 4 }
             };
             int n = 0, v = 0;
             foreach (var kv in counts) { n += kv.Value; v += kv.Value * KeepValue(kv.Key); }
